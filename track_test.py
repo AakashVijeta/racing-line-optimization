@@ -1,5 +1,4 @@
 import pygame
-import numpy as np
 from car import Car
 from plot_track import is_on_track, make_oval, compute_boundaries, close_loop
 
@@ -9,13 +8,15 @@ screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
 clock = pygame.time.Clock()
 
 
-WORLD_SCALE = 2.0   #tune this so the whole track fits on screen
+WORLD_SCALE = 2.0  # tune this so the whole track fits on screen
 OFFSET_X, OFFSET_Y = SCREEN_W // 2, SCREEN_H // 2
+
 
 def world_to_screen(x, y):
     screen_x = OFFSET_X + x * WORLD_SCALE
-    screen_y = OFFSET_Y - y * WORLD_SCALE   
+    screen_y = OFFSET_Y - y * WORLD_SCALE
     return int(screen_x), int(screen_y)
+
 
 # --- set up track and car ---
 centerline = make_oval()
@@ -23,11 +24,11 @@ left, right = compute_boundaries(centerline, track_width=15)
 left_closed = close_loop(left)
 right_closed = close_loop(right)
 
-car = Car(x=-100, y=-60, theta=0) 
+car = Car(x=-100, y=-60, theta=0)
 
 running = True
 while running:
-    dt = clock.tick(60) / 1000.0  
+    dt = clock.tick(60) / 1000.0
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -57,13 +58,17 @@ while running:
 
     left_array = []
     for point in range(len(left_closed)):
-        screen_x, screen_y = world_to_screen(left_closed[point][0], left_closed[point][1])
+        screen_x, screen_y = world_to_screen(
+            left_closed[point][0], left_closed[point][1]
+        )
         left_array.append((screen_x, screen_y))
 
     pygame.draw.lines(screen, (255, 255, 255), False, left_array, 2)
     right_array = []
     for point in range(len(right_closed)):
-        screen_x, screen_y = world_to_screen(right_closed[point][0], right_closed[point][1])
+        screen_x, screen_y = world_to_screen(
+            right_closed[point][0], right_closed[point][1]
+        )
         right_array.append((screen_x, screen_y))
     pygame.draw.lines(screen, (255, 255, 255), False, right_array, 2)
 
@@ -74,6 +79,6 @@ while running:
     if not on_track:
         car.x, car.y, car.theta, car.v = -100, -60, 0, 0.0
 
-    pygame.display.flip() 
+    pygame.display.flip()
 
 pygame.quit()

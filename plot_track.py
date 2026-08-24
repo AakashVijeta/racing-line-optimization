@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def make_straight(start_point, end_point, n_points):
     """
     Generate n_points evenly spaced points from start_point to end_point.
@@ -45,27 +46,36 @@ def make_arc(center, radius, start_angle_deg, end_angle_deg, n_points):
     return points
 
 
-def make_oval(straight_length=200.0, radius=60.0, points_per_straight=50, points_per_arc=40):
+def make_oval(
+    straight_length=200.0, radius=60.0, points_per_straight=50, points_per_arc=40
+):
     half_length = straight_length / 2.0
 
-    bottom_straight = make_straight((-half_length, -radius), (half_length, -radius), points_per_straight)
+    bottom_straight = make_straight(
+        (-half_length, -radius), (half_length, -radius), points_per_straight
+    )
     right_arc = make_arc((half_length, 0), radius, -90, 90, points_per_arc)
-    top_straight = make_straight((half_length, radius), (-half_length, radius), points_per_straight)
+    top_straight = make_straight(
+        (half_length, radius), (-half_length, radius), points_per_straight
+    )
     left_arc = make_arc((-half_length, 0), radius, 90, 270, points_per_arc)
 
-    centerline = np.concatenate([bottom_straight, right_arc, top_straight, left_arc], axis=0)
+    centerline = np.concatenate(
+        [bottom_straight, right_arc, top_straight, left_arc], axis=0
+    )
 
     return centerline
+
 
 def compute_boundaries(centerline, track_width):
     centerline_array = np.asarray(centerline)
 
     next_line = np.roll(centerline_array, -1, axis=0)
-    direction_vectors = next_line - centerline_array   
+    direction_vectors = next_line - centerline_array
 
-    incoming_vectors = np.roll(direction_vectors, 1, axis=0)  
+    incoming_vectors = np.roll(direction_vectors, 1, axis=0)
 
-    tangents = direction_vectors + incoming_vectors   
+    tangents = direction_vectors + incoming_vectors
 
     magnitudes = np.linalg.norm(tangents, axis=1)
     unit_tangents = tangents / magnitudes[:, np.newaxis]
@@ -75,8 +85,10 @@ def compute_boundaries(centerline, track_width):
     right_boundary = centerline_array - normals * (track_width / 2)
     return left_boundary, right_boundary
 
+
 def close_loop(points):
     return np.concatenate([points, points[:1]])
+
 
 def is_on_track(car_x, car_y, centerline, track_width):
     distances = np.linalg.norm(centerline - np.array([car_x, car_y]), axis=1)

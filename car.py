@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class Car:
     def __init__(self, x, y, theta, wheelbase=2.5, max_lateral_accel=8.0):
         """
@@ -24,7 +25,7 @@ class Car:
         """
         # 1. Update speed from throttle FIRST so the car can start moving
         self.v = self.v + throttle * dt
-        
+
         # Add a tiny bit of natural friction so the car slowly stops if you let go
         if throttle == 0.0:
             self.v *= 0.98
@@ -36,8 +37,12 @@ class Car:
             v_max = np.sqrt(self.a_max * abs(r))
             if self.v > v_max:
                 excess = self.v - v_max
-                grip_loss_rate = 5.0  # TODO: tune this - how many m/s per second bleeds off
-                self.v -= min(grip_loss_rate * dt, excess)  # don't overshoot below v_max
+                grip_loss_rate = (
+                    5.0  # TODO: tune this - how many m/s per second bleeds off
+                )
+                self.v -= min(
+                    grip_loss_rate * dt, excess
+                )  # don't overshoot below v_max
             elif self.v < -v_max:  # Also cap it if reversing
                 self.v = -v_max
 
@@ -47,7 +52,6 @@ class Car:
         # 4. Move the car's X and Y positions using the updated speed
         self.x = self.x + self.v * np.cos(self.theta) * dt
         self.y = self.y + self.v * np.sin(self.theta) * dt
-
 
     def get_state(self):
         return (self.x, self.y, self.theta, self.v)
