@@ -7,7 +7,7 @@ env = RacingEnv()
 model = SAC("MlpPolicy", env, verbose=1)
 
 checkpoint_callback = CheckpointCallback(
-    save_freq=7500, save_path="./sac_v7/checkpoints/", name_prefix="sac_racing"
+    save_freq=7500, save_path="./models/sac_v7/checkpoints/", name_prefix="sac_racing"
 )
 
 model.learn(total_timesteps=150000, callback=checkpoint_callback)

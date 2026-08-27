@@ -1,11 +1,6 @@
 import numpy as np
 
-
 def make_straight(start_point, end_point, n_points):
-    """
-    Generate n_points evenly spaced points from start_point to end_point.
-    start_point, end_point: tuples like (x, y)
-    """
     x_start, y_start = start_point
     x_end, y_end = end_point
 
@@ -22,12 +17,6 @@ def make_straight(start_point, end_point, n_points):
 
 
 def make_arc(center, radius, start_angle_deg, end_angle_deg, n_points):
-    """
-    Generate n_points evenly spaced points along a circular arc.
-    center: tuple (cx, cy)
-    radius: float
-    start_angle_deg, end_angle_deg: sweep range in degrees
-    """
     cx, cy = center
 
     # TODO: convert start/end angles from degrees to radians
