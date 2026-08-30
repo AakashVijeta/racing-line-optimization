@@ -3,77 +3,100 @@ import numpy as np
 import pygame
 from car import Car
 from gymnasium import spaces
-from plot_track import make_oval, is_on_track, compute_boundaries, close_loop
+from plot_track import is_on_track, compute_boundaries, close_loop
 
 
 class RacingEnv(gym.Env):
     def __init__(
         self,
+        track_pool,
         render_mode=None,
-        track_width=15.0,
-        n_lookahead=5,
+        track_width=15.0,        # Fallback width if a track is not in track_widths
+        track_widths=None,       # Optional dict: {"mc-1929": 8.0, "sg-2008": 12.0, ...}
+        n_lookahead=10,
         dt=0.05,
         spacing=10.0,
-        max_steps=2000,
+        
     ):
         super().__init__()
         self.dt = dt
         self.render_mode = render_mode
         self.screen = None
         self.clock = pygame.time.Clock()
-        self.max_steps = max_steps
+        # self.max_steps = None
         self.n_lookahead = n_lookahead
         self.spacing = spacing
+        
+        # Track width configuration
+        self.default_track_width = track_width
+        self.track_widths_dict = track_widths if track_widths is not None else {}
         self.track_width = track_width
+
         self.max_lookahead = n_lookahead * spacing
-        self.max_expected_v = 40
-        self.throttle_max = 20
-        self.throttle_min = -20
+        self.max_expected_v = 40.0
+        self.throttle_max = 20.0
+        self.throttle_min = -5.0
         self.steering_max = 0.4
         self.steering_min = -0.4
         self.smoothness_weight = 0.2
-        self.centerline = make_oval()
-
-        gaps = np.linalg.norm(np.diff(self.centerline, axis=0), axis=1)
-        keep_mask = np.concatenate([[True], gaps > 1e-6])
-
-        self.centerline = self.centerline[keep_mask]
-        left, right = compute_boundaries(self.centerline, self.track_width)
-        self.left_boundary = close_loop(left)
-        self.right_boundary = close_loop(right)
-
-        # RECOMPUTE after filtering
-        self.segment_lengths = np.linalg.norm(np.diff(self.centerline, axis=0), axis=1)
-
-        self.arc_length = np.concatenate([[0], np.cumsum(self.segment_lengths)])
-        closing_segment = np.linalg.norm(self.centerline[0] - self.centerline[-1])
-        self.track_length = self.arc_length[-1] + closing_segment
-
+        self.track_pool = track_pool
+        
+        self._load_track(np.random.choice(list(self.track_pool.keys())))
+        
         self.action_space = spaces.Box(
             low=np.array([-1, -1], dtype=np.float32),
             high=np.array([1, 1], dtype=np.float32),
             dtype=np.float32,
         )
         self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(3 + self.n_lookahead * 2,),
-            dtype=np.float32,
+            low=-np.inf, high=np.inf, shape=(3 + self.n_lookahead * 2,), dtype=np.float32,
         )
+
+    def _load_track(self, track_name):
+        # 1. Resolve dynamic track width for this specific track
+        self.track_width = self.track_widths_dict.get(track_name, self.default_track_width)
+
+        centerline = self.track_pool[track_name]
+        gaps = np.linalg.norm(np.diff(centerline, axis=0), axis=1)
+        keep_mask = np.concatenate([[True], gaps > 1e-6])
+        self.centerline = centerline[keep_mask]
+
+        if np.linalg.norm(self.centerline[0] - self.centerline[-1]) < 1e-3:
+            self.centerline = self.centerline[:-1]
+
+        # 2. Compute boundaries using the resolved dynamic width
+        left, right = compute_boundaries(self.centerline, self.track_width)
+        self.left_boundary = close_loop(left)
+        self.right_boundary = close_loop(right)
+        
+        self.segment_lengths = np.linalg.norm(np.diff(self.centerline, axis=0), axis=1)
+        self.arc_length = np.concatenate([[0], np.cumsum(self.segment_lengths)])
+        closing_segment = np.linalg.norm(self.centerline[0] - self.centerline[-1])
+        self.track_length = self.arc_length[-1] + closing_segment
+        # 1. Base the timeout on an average minimum speed (e.g. 12 m/s ≈ 43 km/h)
+        min_avg_speed = 12.0  # meters per second
+        max_allowed_time = self.track_length / min_avg_speed
+
+        # 2. Convert to environment steps and add a small buffer for low-speed corner exploration
+        self.max_steps = int(max_allowed_time / self.dt) + 200
+
+        p0, p1 = self.centerline[0], self.centerline[1]
+        self.spawn_x, self.spawn_y = p0
+        self.spawn_theta = np.arctan2(p1[1] - p0[1], p1[0] - p0[0])
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
+        track_name = self.np_random.choice(list(self.track_pool.keys()))
+        self._load_track(track_name)
+        self._cumulative_arc = 0.0
         self.steps = 0
         self._prev_steering = 0.0
-        self.car = Car(x=-100, y=-60, theta=0.0)  # starting position and heading
+        self.car = Car(x=self.spawn_x, y=self.spawn_y, theta=self.spawn_theta)
         self.trail = [(self.car.x, self.car.y)]
-        self._prev_arc_length = (
-            self.precise_arc_length()
-        )  # initialize previous arc length
+        self._prev_arc_length = self.precise_arc_length()
 
         observation = self._get_obs()
         info = {}
-
         return observation, info
 
     def precise_arc_length(self):
@@ -91,12 +114,17 @@ class RacingEnv(gym.Env):
         segment_vec_forward = p2 - p1
         segment_vec_backward = p1 - p3
 
-        t_forward = np.dot(
-            segment_vec_forward, np.array([self.car.x, self.car.y]) - p1
-        ) / np.dot(segment_vec_forward, segment_vec_forward)
-        t_backward = np.dot(
-            segment_vec_backward, np.array([self.car.x, self.car.y]) - p3
-        ) / np.dot(segment_vec_backward, segment_vec_backward)
+        denom_forward = np.dot(segment_vec_forward, segment_vec_forward)
+        denom_backward = np.dot(segment_vec_backward, segment_vec_backward)
+
+        t_forward = (
+            np.dot(segment_vec_forward, np.array([self.car.x, self.car.y]) - p1) / denom_forward
+            if denom_forward > 1e-12 else -1.0
+        )
+        t_backward = (
+            np.dot(segment_vec_backward, np.array([self.car.x, self.car.y]) - p3) / denom_backward
+            if denom_backward > 1e-12 else -1.0
+        )
 
         if 1 >= t_forward >= 0:
             t = t_forward
@@ -129,7 +157,8 @@ class RacingEnv(gym.Env):
 
         car_vec = np.array([self.car.x, self.car.y]) - p1
         cross = unit_track_vec[0] * car_vec[1] - unit_track_vec[1] * car_vec[0]
-        normalized_lateral_error = cross / (self.track_width / 2)
+        # Normalized by current track's half-width: [-1, 1] means within boundaries
+        normalized_lateral_error = cross / (self.track_width / 2.0)
 
         track_heading = np.arctan2(track_vec[1], track_vec[0])
         heading_error = track_heading - self.car.theta
@@ -152,6 +181,7 @@ class RacingEnv(gym.Env):
             wrapped_angle = (((relative_angle + np.pi) % (2 * np.pi)) - np.pi) / np.pi
 
             lookahead_points.append((distance, wrapped_angle))
+            
         flat = [value for pair in lookahead_points for value in pair]
 
         return np.array(
@@ -165,7 +195,6 @@ class RacingEnv(gym.Env):
         )
 
     def step(self, action):
-
         steering, throttle = action
 
         throttle_physical = self.throttle_min + ((throttle + 1) / 2) * (
@@ -182,45 +211,45 @@ class RacingEnv(gym.Env):
         self._prev_steering = steering
 
         car_arc = self.precise_arc_length()
-
         diff = car_arc - self._prev_arc_length
         crossed_finish_forward = False
 
         if diff > self.track_length / 2:
-            # Car nudged backward across arc=0 (diff looks like a big positive
-            # jump because precise_arc_length() snapped to the far end of the
-            # loop). This is NOT a lap completion.
             arc_diff = diff - self.track_length
-
         elif diff < -self.track_length / 2:
-            # Car moved forward across the finish line (arc wrapped from
-            # near track_length back to near 0). This IS a real lap completion.
             arc_diff = diff + self.track_length
             crossed_finish_forward = True
-
         else:
-            # Normal movement along the track.
             arc_diff = diff
+
+        self._cumulative_arc += arc_diff
+        if crossed_finish_forward and self._cumulative_arc < 0.9 * self.track_length:
+            crossed_finish_forward = False
 
         self._prev_arc_length = car_arc
         lap_completed = crossed_finish_forward
 
+        normalized_progress = arc_diff / self.track_length
+        LAP_PROGRESS_REWARD = 500.0
+        progress_reward = normalized_progress * LAP_PROGRESS_REWARD
+        time_penalty = 0.1
+
         on_track = is_on_track(
             self.car.x, self.car.y, self.centerline, self.track_width
         )
+        going_backward = arc_diff < -1.0
 
-        if not on_track:
+        if not on_track or going_backward:
             reward = -50.0
             terminated = True
         elif lap_completed:
-            reward = arc_diff - 0.1 + 100.0
+            reward = progress_reward + 100.0
             terminated = True
         else:
-            reward = arc_diff - 0.1
+            reward = progress_reward - time_penalty
             terminated = False
 
         reward -= self.smoothness_weight * steering_delta
-
         truncated = self.steps >= self.max_steps
 
         obs = self._get_obs()
@@ -245,7 +274,16 @@ class RacingEnv(gym.Env):
 
         self.screen.fill((30, 30, 30))
 
-        scale, offset_x, offset_y = 2.0, 400, 250
+        all_points = np.concatenate([self.left_boundary, self.right_boundary], axis=0)
+        min_x, min_y = all_points.min(axis=0)
+        max_x, max_y = all_points.max(axis=0)
+        track_w = max(max_x - min_x, 1e-6)
+        track_h = max(max_y - min_y, 1e-6)
+
+        margin = 40
+        scale = min((800 - 2 * margin) / track_w, (500 - 2 * margin) / track_h)
+        offset_x = 400 - scale * (min_x + max_x) / 2
+        offset_y = 250 + scale * (min_y + max_y) / 2
 
         def to_screen(x, y):
             return int(x * scale + offset_x), int(offset_y - y * scale)
@@ -264,20 +302,3 @@ class RacingEnv(gym.Env):
 
         pygame.display.flip()
         self.clock.tick(30)
-
-
-# env = RacingEnv()
-
-# obs, info = env.reset()
-
-# print("observation:", obs)
-# print("observation shape:", obs.shape)
-# print("space shape:", env.observation_space.shape)
-# print("contains:", env.observation_space.contains(obs))
-
-# for i in range(20):
-#     action = 8 # check your action_table — pick whichever index means (steering=0, throttle=0 or +20)
-#     obs, reward, terminated, truncated, info = env.step(action)
-#     print(f"step {i}: v={obs[0]:.2f}, heading_error={obs[1]:.2f}, reward={reward:.3f}, on_track={not terminated}")
-#     if terminated:
-#         break

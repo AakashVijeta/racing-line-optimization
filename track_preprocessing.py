@@ -1,6 +1,6 @@
-import json
+import json, os
 import numpy as np
-
+from plot_track import make_oval
 
 def load_geojson_circuit(filepath):
     with open(filepath, "r") as f:
@@ -45,9 +45,25 @@ def preprocess_circuit(geojson_path, n_points=400):
     deduped = deduplicate_points(local_xy)
     return resample_even_spacing(deduped, n_points)
 
+def build_track_pool(track_ids, tracks_dir="tracks"):
+    pool = {"oval": make_oval()}
+    for track_id in track_ids:
+        pool[track_id] = np.load(f"{tracks_dir}/{track_id}.npy")
+    return pool
 
-if __name__ == "__main__":
-    circuit_id = "de-1927"  # Nürburgring GP-Strecke
-    centerline = preprocess_circuit(f"circuits/{circuit_id}.geojson")
-    np.save(f"tracks/{circuit_id}.npy", centerline)
-    print(f"Saved {circuit_id}: {centerline.shape[0]} points")
+def prepare_tracks(track_ids, circuits_dir="circuits", tracks_dir="tracks", n_points=400):
+    os.makedirs(tracks_dir, exist_ok=True)
+    for track_id in track_ids:
+        npy_path = f"{tracks_dir}/{track_id}.npy"
+        if os.path.exists(npy_path):
+            continue
+        geojson_path = f"{circuits_dir}/{track_id}.geojson"
+        centerline = preprocess_circuit(geojson_path, n_points=n_points)
+        np.save(npy_path, centerline)
+        print(f"Prepared {track_id}: {centerline.shape[0]} points")
+
+# if __name__ == "__main__":
+#     circuit_id = "de-1927"  # Nürburgring GP-Strecke
+#     centerline = preprocess_circuit(f"circuits/{circuit_id}.geojson")
+#     np.save(f"tracks/{circuit_id}.npy", centerline)
+#     print(f"Saved {circuit_id}: {centerline.shape[0]} points")

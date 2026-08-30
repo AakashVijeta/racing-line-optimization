@@ -4,11 +4,8 @@ def make_straight(start_point, end_point, n_points):
     x_start, y_start = start_point
     x_end, y_end = end_point
 
-    # TODO: generate n_points evenly spaced x-values between x_start and x_end
+    # Generate n_points evenly spaced x-values and y-values
     xs = np.linspace(x_start, x_end, n_points, endpoint=True)
-
-    # TODO: same for y-values (for our bottom/top straights, y doesn't change,
-    # but write it generally so this function works for any straight)
     ys = np.linspace(y_start, y_end, n_points, endpoint=True)
 
     # combine xs and ys into an (n_points, 2) array of points
@@ -19,15 +16,14 @@ def make_straight(start_point, end_point, n_points):
 def make_arc(center, radius, start_angle_deg, end_angle_deg, n_points):
     cx, cy = center
 
-    # TODO: convert start/end angles from degrees to radians
-    # hint: np.radians() or np.deg2rad()
+    # Convert start/end angles from degrees to radians
     start_rad = np.radians(start_angle_deg)
     end_rad = np.radians(end_angle_deg)
 
-    # TODO: generate n_points evenly spaced angles between start_rad and end_rad
+    # Generate n_points evenly spaced angles
     angles = np.linspace(start_rad, end_rad, n_points, endpoint=True)
 
-    # TODO: apply the circle formula to each angle to get x, y
+    # Apply the circle formula to each angle to get x, y
     xs = cx + radius * np.cos(angles)
     ys = cy + radius * np.sin(angles)
 
@@ -80,9 +76,35 @@ def close_loop(points):
 
 
 def is_on_track(car_x, car_y, centerline, track_width):
-    distances = np.linalg.norm(centerline - np.array([car_x, car_y]), axis=1)
+    """
+    Checks if the car is within the track boundaries using true point-to-segment distance.
+    """
+    P = np.array([car_x, car_y])
+    A = centerline
+    B = np.roll(centerline, -1, axis=0)  # Next point for each segment
+    
+    # Vector A to B (the segment)
+    AB = B - A
+    # Vector A to P (car to start of segment)
+    AP = P - A
+    
+    # Project AP onto AB to find the parameterized position 't' of the closest point
+    AB_dot_AB = np.sum(AB * AB, axis=1)
+    AP_dot_AB = np.sum(AP * AB, axis=1)
+    
+    # np.maximum prevents division by zero for duplicate points
+    t = AP_dot_AB / np.maximum(AB_dot_AB, 1e-12)
+    
+    # Clamp 't' between 0 and 1 so we don't project past the ends of the segment
+    t = np.clip(t, 0.0, 1.0)
+    
+    # Calculate the actual closest points on all segments
+    closest_points = A + t[:, np.newaxis] * AB
+    
+    # Find the distances from the car to all closest points
+    distances = np.linalg.norm(P - closest_points, axis=1)
+    
+    # If the absolute minimum distance is less than half the track width, we are on track
     min_distance = np.min(distances)
-    if min_distance <= (track_width / 2):
-        return True
-    else:
-        return False
+    
+    return min_distance <= (track_width / 2.0)
