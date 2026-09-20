@@ -18,7 +18,7 @@ def main():
         render_mode="human"
     )
 
-    model_path = get_model_path("v12")
+    model_path = get_model_path("v13")
     print(f"Loading model from {model_path}...")
     model = SAC.load(model_path)
 

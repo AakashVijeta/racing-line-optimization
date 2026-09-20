@@ -36,9 +36,10 @@ MODEL_PATHS = {
     "v10": "./models/sac_v10/best_model/best_model.zip",
     "v11": "./models/sac_v11/best_model/best_model.zip",
     "v12": "./models/sac_v12/best_model/best_model.zip",
+    "v13": "./models/sac_v13/best_model/best_model.zip",
 }
 
-DEFAULT_MODEL_VERSION = "v12"
+DEFAULT_MODEL_VERSION = "v13"
 
 def get_model_path(version=None):
     """Get the model path for a given version string."""

@@ -21,7 +21,7 @@ def main():
     prepare_tracks(track_ids)
     full_track_pool = build_track_pool(track_ids=track_ids)
 
-    model_path = get_model_path("v12")
+    model_path = get_model_path("v13")
     print(f"Loading optimum model from {model_path}...\n")
     model = SAC.load(model_path)
 
@@ -45,14 +45,18 @@ def main():
             done = terminated or truncated
             steps += 1
             
-        if reward > 50.0: 
+        reason = info.get("termination_reason", "unknown")
+        
+        if reason == "lap_completed": 
             lap_time = steps * env.dt
             avg_speed_kph = (env.track_length / lap_time) * 3.6
             results[track_id] = (lap_time, avg_speed_kph, "Finished")
-        elif truncated:
-            results[track_id] = (None, 0.0, f"DNF (Timeout at {steps} steps)")
+        elif reason == "timeout" or truncated:
+            arc_frac = env._cumulative_arc / env.track_length
+            results[track_id] = (None, 0.0, f"Timeout at {steps} steps (Arc: {arc_frac:.2f})")
         else:
-            results[track_id] = (None, 0.0, f"DNF (Crashed at {steps} steps)")
+            arc_frac = env._cumulative_arc / env.track_length
+            results[track_id] = (None, 0.0, f"{reason} at {steps} steps (Arc: {arc_frac:.2f})")
             
         env.close()
 

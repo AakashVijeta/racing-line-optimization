@@ -31,3 +31,8 @@ logs/
 
 # Pytest
 .pytest_cache/
+
+# Generated outputs and plots
+dnf_diagnosis/
+*_plot.png
+*.mp4

@@ -30,12 +30,16 @@ class RacingEnv(gym.Env):
         self.track_width = track_width
 
         self.max_lookahead = n_lookahead * spacing
-        self.max_expected_v = 100.0       # Raised to 100 m/s (360 km/h) for faster driving
+        self.max_expected_v = 100.0     
         self.throttle_max = 20.0
-        self.throttle_min = -40.0         # Fix 2: 4G braking (was -5.0 = 0.5G)
+        self.throttle_min = -40.0      
         self.steering_max = 0.4
         self.steering_min = -0.4
-        self.smoothness_weight = 0.15
+        
+        # Reward constants (per-metre basis, track-length invariant)
+        self.reward_per_metre = 0.1
+        self.v_ref = 30.0  # Reference speed for scaling penalties
+        self.stall_window = int(10.0 / dt)  # 10 seconds worth of steps
         self.track_pool = track_pool
         
         self._load_track(np.random.choice(list(self.track_pool.keys())))
@@ -89,21 +93,35 @@ class RacingEnv(gym.Env):
     def _precompute_curvature(self):
         """Pre-compute curvature at each centerline point using shared implementation."""
         self.curvature = compute_curvature(self.centerline)
-        # Cap extreme curvature values for normalization
-        self.max_curvature = 0.5  # Corresponds to ~2m radius, anything tighter is capped
+        # Cap extreme curvature values for normalization (real corners are ~0.02-0.1)
+        self.max_curvature = 0.1
 
     def _update_nearest_index(self):
         """Compute and cache the nearest centerline index for the current car position.
         
-        Called once per step; all methods that need the nearest point reuse this
-        cached value instead of doing their own O(N) scan.
+        Uses a global scan at spawn, and a windowed search during normal stepping
+        to prevent jumping across track crossovers (e.g. Suzuka).
         """
         car_pos = np.array([self.car.x, self.car.y])
-        distances = np.linalg.norm(self.centerline - car_pos, axis=1)
-        self._nearest_idx = np.argmin(distances)
-        self._nearest_dist = distances[self._nearest_idx]
-        # Cache the full distances array for boundary penalty / on-track checks
-        self._distances_to_center = distances
+        if getattr(self, '_nearest_idx', None) is None:
+            # Global search at spawn
+            distances = np.linalg.norm(self.centerline - car_pos, axis=1)
+            self._nearest_idx = np.argmin(distances)
+            self._nearest_dist = distances[self._nearest_idx]
+        else:
+            # Windowed search (+/- 30 points = 300m window)
+            window = 30
+            n = len(self.centerline)
+            idx = self._nearest_idx
+            
+            indices = np.arange(idx - window, idx + window + 1) % n
+            window_points = self.centerline[indices]
+            
+            distances = np.linalg.norm(window_points - car_pos, axis=1)
+            local_min_idx = np.argmin(distances)
+            
+            self._nearest_idx = indices[local_min_idx]
+            self._nearest_dist = distances[local_min_idx]
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -112,10 +130,14 @@ class RacingEnv(gym.Env):
         self._cumulative_arc = 0.0
         self.steps = 0
         self._prev_steering = 0.0
+        self._stall_arc_history = 0.0  # Rolling arc progress for stall detection
+        self._stall_check_step = 0
         self.car = Car(x=self.spawn_x, y=self.spawn_y, theta=self.spawn_theta)
         self.trail = [(self.car.x, self.car.y)]
+        self._nearest_idx = None  # Force global search on reset
         self._update_nearest_index()
         self._prev_arc_length = self.precise_arc_length()
+        self._cached_arc = self._prev_arc_length
 
         observation = self._get_obs()
         return observation, {}
@@ -147,18 +169,29 @@ class RacingEnv(gym.Env):
             if denom_backward > 1e-12 else -1.0
         )
 
-        if 1 >= t_forward >= 0:
-            t = t_forward
-            segment_vec = segment_vec_forward
-            base_arc = self.arc_length[min_dist_idx]
-        elif 1 >= t_backward >= 0:
-            t = t_backward
-            segment_vec = segment_vec_backward
-            base_arc = self.arc_length[before_idx]
+        fwd_valid = 0 <= t_forward <= 1
+        bwd_valid = 0 <= t_backward <= 1
+        
+        if fwd_valid and bwd_valid:
+            # Both projections valid (near a vertex on a sharp bend).
+            # Pick the one with the smaller perpendicular distance.
+            proj_fwd = p1 + t_forward * segment_vec_forward
+            proj_bwd = p3 + t_backward * segment_vec_backward
+            if np.linalg.norm(car_pos - proj_fwd) <= np.linalg.norm(car_pos - proj_bwd):
+                t, segment_vec, base_arc, proj_point = t_forward, segment_vec_forward, self.arc_length[min_dist_idx], proj_fwd
+            else:
+                t, segment_vec, base_arc, proj_point = t_backward, segment_vec_backward, self.arc_length[before_idx], proj_bwd
+        elif fwd_valid:
+            proj_point = p1 + t_forward * segment_vec_forward
+            t, segment_vec, base_arc = t_forward, segment_vec_forward, self.arc_length[min_dist_idx]
+        elif bwd_valid:
+            proj_point = p3 + t_backward * segment_vec_backward
+            t, segment_vec, base_arc = t_backward, segment_vec_backward, self.arc_length[before_idx]
         else:
-            t = 0.0
-            segment_vec = segment_vec_forward
-            base_arc = self.arc_length[min_dist_idx]
+            t, segment_vec, base_arc = 0.0, segment_vec_forward, self.arc_length[min_dist_idx]
+            proj_point = p1
+            
+        self._perp_distance = np.linalg.norm(car_pos - proj_point)
 
         return base_arc + t * np.linalg.norm(segment_vec)
 
@@ -188,7 +221,7 @@ class RacingEnv(gym.Env):
         # Use cached nearest index instead of recomputing
         min_dist_idx = self._nearest_idx
         next_idx = (min_dist_idx + 1) % len(self.centerline)
-        car_arc = self.precise_arc_length()
+        car_arc = self._cached_arc
 
         p1 = self.centerline[min_dist_idx]
         p2 = self.centerline[next_idx]
@@ -225,8 +258,8 @@ class RacingEnv(gym.Env):
             wrapped_angle = (((relative_angle + np.pi) % (2 * np.pi)) - np.pi) / np.pi
 
             # Fix 3: Add curvature at each lookahead point
-            curv_at_point = self.curvature[target_idx]
-            normalized_curv = min(curv_at_point / self.max_curvature, 1.0)
+            curv_at_point = abs(self.curvature[target_idx])
+            normalized_curv = np.clip(curv_at_point / self.max_curvature, 0.0, 1.0)
             
             lookahead_points.append((distance, wrapped_angle, normalized_curv))
             
@@ -249,9 +282,11 @@ class RacingEnv(gym.Env):
     def step(self, action):
         steering, throttle = action
 
-        throttle_physical = self.throttle_min + ((throttle + 1) / 2) * (
-            self.throttle_max - self.throttle_min
-        )
+        if throttle >= 0:
+            throttle_physical = throttle * self.throttle_max
+        else:
+            # throttle is negative, [-1, 0] maps to [-40, 0]
+            throttle_physical = -throttle * self.throttle_min
         steering_physical = self.steering_min + ((steering + 1) / 2) * (
             self.steering_max - self.steering_min
         )
@@ -262,9 +297,9 @@ class RacingEnv(gym.Env):
         steering_delta = abs(steering - self._prev_steering)
         self._prev_steering = steering
 
-        # Single O(N) scan per step — all subsequent methods reuse cached index
         self._update_nearest_index()
         car_arc = self.precise_arc_length()
+        self._cached_arc = car_arc
         diff = car_arc - self._prev_arc_length
         crossed_finish_forward = False
 
@@ -284,75 +319,68 @@ class RacingEnv(gym.Env):
         lap_completed = crossed_finish_forward
         truncated = self.steps >= self.max_steps
         
-        on_track = is_on_track(self.car.x, self.car.y, self.centerline, self.track_width)
+        on_track = self._perp_distance <= (self.track_width / 2.0)
         going_backward = arc_diff < -1.0
 
-        # --- ADVANCED F1 REWARD SHAPING (Fix 4) ---
+        # --- Stall detection ---
+        self._stall_arc_history += arc_diff
+        stalled = False
+        if self.steps - self._stall_check_step >= self.stall_window:
+            if self._stall_arc_history < 5.0:  # < 5m in 10 seconds = stalled
+                stalled = True
+            self._stall_arc_history = 0.0
+            self._stall_check_step = self.steps
+
+        # --- REWARD (per-metre basis, track-length invariant) ---
         
-        # 1. Base Progress — scaled by track length for consistency across tracks
-        normalized_progress = arc_diff / self.track_length
-        progress_reward = normalized_progress * 500.0
+        # 1. Progress: constant reward per metre, independent of L
+        progress_reward = arc_diff * self.reward_per_metre
         
-        # 2. Time Penalty — increased to encourage faster laps
-        time_penalty = 0.5
+        # 2. Time penalty: in same units as progress
+        #    At v_ref, car earns v_ref * dt * reward_per_metre per step.
+        #    Time penalty = α * that. Break-even speed = α * v_ref.
+        ref_reward_per_step = self.v_ref * self.dt * self.reward_per_metre
+        time_penalty = 0.2 * ref_reward_per_step  # Break-even at 6 m/s
         
-        # 3. Tire Slip / Understeer Penalty
-        slip_penalty = 0.0
-        effective_a_max = self.car.a_max  # Now includes downforce
-        if abs(before_v) > 5.0:
-            max_tan_delta = (effective_a_max * self.car.L) / (before_v ** 2)
-            max_safe_steer = np.arctan(max_tan_delta)
-            
-            if abs(steering_physical) > max_safe_steer:
-                slip_penalty = 2.5 * max(0, (abs(steering_physical) - max_safe_steer) / self.steering_max)
-                
-        # 4. Smooth Operator Penalty
-        normalized_speed = abs(before_v) / self.max_expected_v
-        speed_smoothness_penalty = (action[0] ** 2) * normalized_speed * 0.3
+        # 3. Jitter penalty (same units)
+        jitter_penalty = (0.3 * ref_reward_per_step) * steering_delta
+
+        # 4. Crash penalty: ~1.5 × H × ref_reward_per_step
+        #    With γ=0.995, H=200, crash ≈ -45
+        crash_penalty = -45.0
+
+        # --- Termination & Logging ---
+        info = {}
         
-        # 5. Speed Bonus — reward carrying speed, especially on straights
-        speed_bonus = 0.0
-        if on_track and before_v > 10.0:
-            # Use cached nearest index instead of recomputing
-            local_curvature = self.curvature[self._nearest_idx]
-            
-            # On straights (low curvature), bonus for going fast
-            straightness = max(0, 1.0 - local_curvature * 20.0)  # 1.0 on straights, 0 on tight corners
-            speed_bonus = straightness * (before_v / self.max_expected_v) * 0.3
-        
-        # 6. Progressive boundary penalty — warn before crashing
-        boundary_penalty = 0.0
-        if on_track:
-            # Use cached distances from _update_nearest_index()
-            min_dist_to_center = self._nearest_dist
-            half_width = self.track_width / 2.0
-            # If within 20% of the edge, start penalizing
-            edge_proximity = min_dist_to_center / half_width
-            if edge_proximity > 0.8:
-                boundary_penalty = 2.0 * (edge_proximity - 0.8) / 0.2  # Ramps 0→2 near edge
-        
-        # 7. Final Compilation
-        if not on_track or going_backward:
-            reward = -100.0  # Increased crash penalty
+        if not on_track:
+            reward = crash_penalty
             terminated = True
+            info["termination_reason"] = "off_track"
+        elif going_backward:
+            reward = crash_penalty
+            terminated = True
+            info["termination_reason"] = "going_backward"
+        elif stalled:
+            reward = crash_penalty
+            terminated = True
+            info["termination_reason"] = "stalled"
         elif lap_completed:
-            # Bonus inversely proportional to lap time — faster = bigger reward
-            time_bonus = max(0, 200.0 - self.steps * self.dt)
-            reward = progress_reward + 100.0 + time_bonus
+            reward = progress_reward + 10.0  # Small bonus, rest comes from progress
             terminated = True
+            info["termination_reason"] = "lap_completed"
         else:
             reward = (progress_reward 
                      - time_penalty 
-                     - slip_penalty 
-                     - speed_smoothness_penalty 
-                     + speed_bonus 
-                     - boundary_penalty)
-            # Keep jitter penalty
-            reward -= self.smoothness_weight * steering_delta
+                     - jitter_penalty)
             terminated = False
+            info["termination_reason"] = "ongoing"
+        
+        # Fix truncation logging: override if truncated and not already terminated
+        if truncated and not terminated:
+            info["termination_reason"] = "timeout"
 
         obs = self._get_obs()
-        return obs, reward, terminated, truncated, {}
+        return obs, reward, terminated, truncated, info
 
     def render(self):
         if self.render_mode != "human":
@@ -390,8 +418,8 @@ class RacingEnv(gym.Env):
         pygame.draw.lines(self.screen, (255, 255, 255), False, left_points, 2)
         pygame.draw.lines(self.screen, (255, 255, 255), False, right_points, 2)
 
-        on_track = is_on_track(self.car.x, self.car.y, self.centerline, self.track_width)
-        color = (0, 200, 0) if on_track else (200, 0, 0)
+        on_track_render = self._perp_distance <= (self.track_width / 2.0)
+        color = (0, 200, 0) if on_track_render else (200, 0, 0)
         if len(self.trail) >= 2:
             trail_points = [to_screen(p[0], p[1]) for p in self.trail]
             pygame.draw.lines(self.screen, (216, 90, 48), False, trail_points, 2)

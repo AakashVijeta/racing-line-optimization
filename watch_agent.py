@@ -18,7 +18,7 @@ def main():
     single_track_pool = build_track_pool(track_ids=[TARGET_TRACK])
 
     # --- 3. LOAD MODEL & ENVIRONMENT ---
-    model_path = get_model_path("v12")
+    model_path = get_model_path("v13")
     print(f"Loading optimum model from {model_path}...")
     model = SAC.load(model_path)
 
@@ -30,6 +30,9 @@ def main():
 
     print(f"🏎️ Rendering Agent on {TARGET_TRACK.upper()}...")
     print("Press Ctrl+C or close the window to stop.")
+
+    # Initialize pygame so event.get() doesn't crash before render() is called
+    pygame.init()
 
     # --- 4. RENDER LOOP (with graceful exit) ---
     obs, info = env.reset()
@@ -60,7 +63,8 @@ def main():
             print(f"\rSpeed: {speed_kph:5.1f} km/h | Steer: {action[0]:5.2f} | Throttle: {action[1]:5.2f}", end="")
 
             if terminated or truncated:
-                print(f"\nLap Concluded! Reason: {'Finished' if reward > 50 else 'Crashed/Timeout'}")
+                reason = info.get("termination_reason", "unknown")
+                print(f"\nLap Concluded! Reason: {reason}")
                 print("Restarting...\n")
                 obs, info = env.reset()
 
@@ -70,7 +74,6 @@ def main():
         print("Shutting down...")
         env.close()
         pygame.quit()
-        sys.exit(0)
 
 if __name__ == "__main__":
     main()
