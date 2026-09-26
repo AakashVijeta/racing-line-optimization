@@ -1,0 +1,41 @@
+Track Name,Split,Lap Time (s),Formatted Time,Avg Speed (km/h),Status
+US-1909,train,62.3,1:02.300,236.4,Finished
+AT-1969,train,64.15,1:04.150,241.9,Finished
+BR-1940,train,66.7,1:06.700,232.4,Finished
+PT-1972,train,67.75,1:07.750,221.9,Finished
+ZA-1961,train,69.4,1:09.400,235.2,Finished
+CA-1978,train,69.85,1:09.850,225.4,Finished
+NL-1948,train,70.0,1:10.000,219.5,Finished
+ES-1991,train,70.65,1:10.650,238.1,Finished
+DE-1932,train,71.9,1:11.900,228.4,Finished
+AR-1952,train,72.05,1:12.050,215.4,Finished
+HU-1986,train,72.5,1:12.500,217.7,Finished
+BR-1977,train,73.05,1:13.050,245.3,Finished
+IT-1914,train,75.15,1:15.150,251.6,Finished
+PT-2008,train,75.4,1:15.400,222.6,Finished
+MX-1962,train,75.55,1:15.550,205.4,Finished
+US-1956,train,75.95,1:15.950,258.8,Finished
+AU-1953,train,78.05,1:18.050,243.6,Finished
+QA-2004,train,79.4,1:19.400,246.4,Finished
+AE-2009,train,81.1,1:21.100,235.4,Finished
+TR-2005,train,82.5,1:22.500,232.3,Finished
+IT-1922,train,82.8,1:22.800,252.0,Finished
+DE-1927,train,83.1,1:23.100,223.0,Finished
+JP-1962,test,84.75,1:24.750,247.4,Finished
+GB-1948,train,85.45,1:25.450,248.2,Finished
+CN-2004,train,86.8,1:26.800,226.5,Finished
+BH-2002,train,87.7,1:27.700,222.9,Finished
+SA-2021,train,87.85,1:27.850,254.5,Finished
+MY-1999,train,88.1,1:28.100,227.4,Finished
+FR-1969,train,88.15,1:28.150,238.0,Finished
+US-2023,train,90.7,1:30.700,247.5,Finished
+RU-2014,train,91.65,1:31.650,229.7,Finished
+US-2012,train,92.3,1:32.300,215.7,Finished
+AZ-2016,train,94.1,1:34.100,227.8,Finished
+BE-1925,val,101.1,1:41.100,248.9,Finished
+MC-1929,val,,DNF,0.0,off_track at 210 steps (Arc: 0.11)
+IT-1953,train,,DNF,0.0,off_track at 1032 steps (Arc: 0.68)
+SG-2008,train,,DNF,0.0,off_track at 1563 steps (Arc: 0.92)
+FR-1960,train,,DNF,0.0,off_track at 1322 steps (Arc: 0.94)
+US-2022,train,,DNF,0.0,stalled at 1400 steps (Arc: 0.60)
+ES-2026,train,,DNF,0.0,off_track at 581 steps (Arc: 0.31)

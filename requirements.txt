@@ -1,0 +1,20 @@
+# Minimum versions. The released models were trained and tested with the exact
+# versions in requirements-lock.txt; saved SB3 models are pickles, so use those
+# if a model fails to load.
+
+# Core: training and simulation
+stable-baselines3>=2.3
+gymnasium>=1.0
+torch>=2.2
+numpy>=1.26
+pygame>=2.5
+tensorboard>=2.15
+tqdm>=4.66
+
+# Replay and video export
+pillow>=10.0
+imageio>=2.34
+imageio-ffmpeg>=0.4.9
+
+# Tests
+pytest>=8.0

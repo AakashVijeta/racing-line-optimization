@@ -1,12 +1,17 @@
 import json, os
 import numpy as np
 
+# Bump whenever preprocessing output changes, so cached tracks/*.npy are rebuilt
+PREPROCESS_VERSION = 2  # 2: spline + spacing-based point count; drop duplicate closing point
+MANIFEST_NAME = "manifest.json"
+
 
 def load_geojson_circuit(filepath):
     with open(filepath, "r") as f:
         data = json.load(f)
 
-    feature = data["features"][0]
+    # Accept a FeatureCollection (the circuits/ files) or a bare Feature
+    feature = data["features"][0] if data.get("type") == "FeatureCollection" else data
     if feature["geometry"]["type"] == "LineString":
         coords = feature["geometry"]["coordinates"]
         return np.array(coords)
@@ -38,10 +43,11 @@ def resample_even_spacing(points, n_points):
     return np.stack([x_interp, y_interp], axis=1)
 
 
-def compute_curvature(points):
+def compute_curvature(points, signed=False):
     """Compute curvature at each point using finite differences.
     
     Curvature = |dtheta/ds| where theta is the heading angle and s is arc length.
+    With signed=True, returns dtheta/ds instead: positive for left (counter-clockwise) turns.
     Returns an array of curvature values, one per point.
     """
     n = len(points)
@@ -61,7 +67,7 @@ def compute_curvature(points):
     ds = np.linalg.norm(np.diff(points, axis=0), axis=1)
     
     # Curvature = |dtheta| / ds at each interior transition
-    curvature_raw = np.abs(dtheta) / np.maximum(ds, 1e-6)
+    curvature_raw = (dtheta if signed else np.abs(dtheta)) / np.maximum(ds, 1e-6)
     
     # Assign curvature to each point (average of adjacent segment curvatures)
     curvature = np.zeros(n)
@@ -72,95 +78,104 @@ def compute_curvature(points):
     return curvature
 
 
-def resample_adaptive(points, base_n_points=400, curvature_weight=3.0):
-    """Curvature-adaptive resampling: places more points where curvature is high.
-    
-    Algorithm:
-    1. Compute curvature at each raw point
-    2. Build a density function: density(s) = 1 + curvature_weight * normalized_curvature(s)
-    3. Integrate density to get a CDF, then sample uniformly from the CDF
-    
-    This gives ~3-4x more points at hairpins vs straights while keeping total
-    point count manageable.
-    
-    Args:
-        points: (N, 2) array of centerline coordinates
-        base_n_points: base number of output points (auto-scaled up for complex tracks)
-        curvature_weight: how much to amplify point density at high-curvature regions
-    
-    Returns:
-        (M, 2) array of resampled centerline points
+def open_loop(points, tol=1e-6):
+    """Drop the last point if it repeats the first (GeoJSON loops close explicitly).
+
+    Closed-loop maths wraps from the last point back to the first; a repeated
+    point would add a zero-length segment and a fake curvature spike there.
     """
-    # Step 0: First do a fine uniform resampling to get smooth curvature estimates
-    fine_n = max(2000, len(points) * 4)
-    fine_points = resample_even_spacing(points, fine_n)
-    
-    # Step 1: Compute curvature on the fine mesh
-    curvature = compute_curvature(fine_points)
-    
-    # Smooth the curvature with a moving average to avoid noise spikes
-    kernel_size = max(5, fine_n // 100)
-    kernel = np.ones(kernel_size) / kernel_size
-    curvature_smooth = np.convolve(curvature, kernel, mode='same')
-    
-    # Step 2: Determine total output points based on track complexity
-    # If the track has very tight corners (min radius < 15m), use more points
-    max_curvature = np.max(curvature_smooth)
-    min_radius = 1.0 / max(max_curvature, 1e-6)
-    
-    if min_radius < 8.0:
-        n_points = int(base_n_points * 2.5)  # Very tight (Monaco-like): 1000 points
-    elif min_radius < 15.0:
-        n_points = int(base_n_points * 2.0)  # Tight corners: 800 points
-    elif min_radius < 25.0:
-        n_points = int(base_n_points * 1.5)  # Moderate corners: 600 points
-    else:
-        n_points = base_n_points  # Simple track: 400 points
-    
-    # Step 3: Build density function
-    # Normalize curvature to [0, 1] range
-    curv_max = np.max(curvature_smooth)
-    if curv_max > 1e-6:
-        curv_normalized = curvature_smooth / curv_max
-    else:
-        curv_normalized = np.zeros_like(curvature_smooth)
-    
-    # Density = base + weight * curvature (more points where curvature is high)
+    if len(points) > 2 and np.linalg.norm(points[0] - points[-1]) < tol:
+        return points[:-1]
+    return points
+
+
+def catmull_rom_closed(points, step=0.5, alpha=0.5):
+    """Densely sample a smooth closed curve through every input point.
+
+    Centripetal Catmull-Rom (alpha=0.5) passes through the raw GeoJSON points
+    without overshoot or cusps, even where point spacing varies a lot.
+    The raw data is coarse (~20 m between points), so a plain polyline would
+    have zero curvature along each segment and a kink at every vertex.
+    """
+    p = np.asarray(points, dtype=float)
+    n = len(p)
+    out = []
+    for i in range(n):
+        p0, p1, p2, p3 = p[i - 1], p[i], p[(i + 1) % n], p[(i + 2) % n]
+        t1 = np.linalg.norm(p1 - p0) ** alpha
+        t2 = t1 + np.linalg.norm(p2 - p1) ** alpha
+        t3 = t2 + np.linalg.norm(p3 - p2) ** alpha
+        m = max(1, int(np.ceil(np.linalg.norm(p2 - p1) / step)))
+        t = np.linspace(t1, t2, m, endpoint=False)[:, None]
+        # Barry-Goldman pyramidal formulation
+        a1 = (t1 - t) / t1 * p0 + t / t1 * p1
+        a2 = (t2 - t) / (t2 - t1) * p1 + (t - t1) / (t2 - t1) * p2
+        a3 = (t3 - t) / (t3 - t2) * p2 + (t - t2) / (t3 - t2) * p3
+        b1 = (t2 - t) / t2 * a1 + t / t2 * a2
+        b2 = (t3 - t) / (t3 - t1) * a2 + (t - t1) / (t3 - t1) * a3
+        out.append((t2 - t) / (t2 - t1) * b1 + (t - t1) / (t2 - t1) * b2)
+    return np.vstack(out)
+
+
+def circular_moving_average(values, window):
+    """Moving average that wraps around a closed loop (no edge fall-off)."""
+    window = max(1, int(window))
+    pad = window // 2
+    padded = np.concatenate([values[-pad:], values, values[:pad]]) if pad else values
+    smoothed = np.convolve(padded, np.ones(window) / window, mode="same")
+    return smoothed[pad:len(smoothed) - pad] if pad else smoothed
+
+
+def resample_adaptive(points, straight_spacing=5.0, curvature_weight=3.0, smooth_m=20.0):
+    """Curvature-adaptive resampling of a closed loop.
+
+    Point density is 1 + curvature_weight * normalized_curvature, and the point
+    count is chosen so straights get `straight_spacing` metres between points;
+    the tightest corners get (1 + curvature_weight) times denser.
+
+    Args:
+        points: (N, 2) closed-loop centerline, first point not repeated at the end
+        straight_spacing: target spacing (m) where curvature is zero
+        curvature_weight: extra density at the track's highest curvature
+        smooth_m: length (m) of the curvature smoothing window
+
+    Returns:
+        (M, 2) array of resampled centerline points (not repeating the first)
+    """
+    fine = catmull_rom_closed(points)
+    ds = np.linalg.norm(np.diff(np.vstack([fine, fine[:1]]), axis=0), axis=1)  # includes closing segment
+    arc = np.concatenate([[0], np.cumsum(ds)])
+
+    curvature = compute_curvature(fine)
+    curvature = circular_moving_average(curvature, smooth_m / np.mean(ds))
+    curv_max = curvature.max()
+    curv_normalized = curvature / curv_max if curv_max > 1e-6 else np.zeros_like(curvature)
     density = 1.0 + curvature_weight * curv_normalized
-    
-    # Step 4: Compute arc lengths on fine mesh
-    ds = np.linalg.norm(np.diff(fine_points, axis=0), axis=1)
-    arc_lengths = np.concatenate([[0], np.cumsum(ds)])
-    
-    # Step 5: Build weighted CDF
-    # weighted_ds[i] = density[i] * ds[i]  (how much "sampling weight" each segment gets)
-    weighted_ds = density[:-1] * ds
-    weighted_cumsum = np.concatenate([[0], np.cumsum(weighted_ds)])
-    weighted_total = weighted_cumsum[-1]
-    
-    # Step 6: Sample n_points uniformly from the weighted CDF
-    target_weights = np.linspace(0, weighted_total, n_points, endpoint=False)
-    
-    # Use proper interpolation to avoid duplicate points
-    # Map target weights back to arc-length positions, then interpolate x,y
-    target_arc_positions = np.interp(target_weights, weighted_cumsum, arc_lengths)
-    
-    # Interpolate x and y from the fine mesh using arc-length positions
-    result_x = np.interp(target_arc_positions, arc_lengths, fine_points[:, 0])
-    result_y = np.interp(target_arc_positions, arc_lengths, fine_points[:, 1])
-    result = np.stack([result_x, result_y], axis=1)
-    
-    return result
+
+    # Weighted CDF over every segment, including the closing one
+    weighted = np.concatenate([[0], np.cumsum(density * ds)])
+    n_points = int(np.ceil(weighted[-1] / straight_spacing))
+    targets = np.linspace(0, weighted[-1], n_points, endpoint=False)
+    target_arc = np.interp(targets, weighted, arc)
+
+    loop = np.vstack([fine, fine[:1]])
+    return np.stack([np.interp(target_arc, arc, loop[:, 0]),
+                     np.interp(target_arc, arc, loop[:, 1])], axis=1)
 
 
-def preprocess_circuit(geojson_path, n_points=400, adaptive=True):
+def preprocess_circuit(geojson_path, n_points=400, adaptive=True, straight_spacing=5.0):
+    """GeoJSON circuit -> (M, 2) centerline in metres.
+
+    adaptive=True: smooth spline, curvature-adaptive spacing (straight_spacing on straights).
+    adaptive=False: plain polyline resampled to exactly n_points evenly spaced points.
+    """
     raw = load_geojson_circuit(geojson_path)
     ref_lon, ref_lat = raw[0]
     local_xy = project_to_local_xy(raw, ref_lon, ref_lat)
     deduped = deduplicate_points(local_xy)
-    
+
     if adaptive:
-        return resample_adaptive(deduped, base_n_points=n_points)
+        return resample_adaptive(open_loop(deduped), straight_spacing=straight_spacing)
     else:
         return resample_even_spacing(deduped, n_points)
 
@@ -172,19 +187,42 @@ def build_track_pool(track_ids, tracks_dir="tracks"):
     return pool
 
 
-def prepare_tracks(track_ids, circuits_dir="circuits", tracks_dir="tracks", n_points=400):
+def prepare_tracks(track_ids, circuits_dir="circuits", tracks_dir="tracks", straight_spacing=5.0, force=False):
+    """Build tracks/<id>.npy for each track that is missing or stale.
+
+    A track is stale when the manifest records a different preprocessing
+    version or spacing than the current call would produce.
+    """
     os.makedirs(tracks_dir, exist_ok=True)
+    manifest_path = os.path.join(tracks_dir, MANIFEST_NAME)
+    manifest = {}
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+    wanted = {"version": PREPROCESS_VERSION, "straight_spacing": straight_spacing}
+    changed = False
     for track_id in track_ids:
         npy_path = f"{tracks_dir}/{track_id}.npy"
-        if os.path.exists(npy_path):
+        if not force and os.path.exists(npy_path) and manifest.get(track_id) == wanted:
             continue
         geojson_path = f"{circuits_dir}/{track_id}.geojson"
-        centerline = preprocess_circuit(geojson_path, n_points=n_points, adaptive=True)
+        centerline = preprocess_circuit(geojson_path, adaptive=True, straight_spacing=straight_spacing)
         np.save(npy_path, centerline)
+        manifest[track_id] = wanted
+        changed = True
         print(f"Prepared {track_id}: {centerline.shape[0]} points")
 
-# if __name__ == "__main__":
-#     circuit_id = "de-1927"  # Nürburgring GP-Strecke
-#     centerline = preprocess_circuit(f"circuits/{circuit_id}.geojson")
-#     np.save(f"tracks/{circuit_id}.npy", centerline)
-#     print(f"Saved {circuit_id}: {centerline.shape[0]} points")
+    if changed:
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2, sort_keys=True)
+
+if __name__ == "__main__":
+    import argparse
+    from config import TRACK_IDS
+
+    parser = argparse.ArgumentParser(description="Preprocess circuits/*.geojson into tracks/*.npy")
+    parser.add_argument("tracks", nargs="*", default=TRACK_IDS, help="track IDs (default: all)")
+    parser.add_argument("--force", action="store_true", help="rebuild even if the cache is current")
+    args = parser.parse_args()
+    prepare_tracks(args.tracks, force=args.force)

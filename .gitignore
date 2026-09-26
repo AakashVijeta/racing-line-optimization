@@ -21,6 +21,11 @@ env/
 .DS_Store
 Thumbs.db
 
+# Local AI tooling (per-machine settings with absolute paths)
+.claude/
+CLAUDE.md
+graphify-out/
+
 # Training artifacts (large binary files)
 models/
 tb_logs/
@@ -32,7 +37,13 @@ logs/
 # Pytest
 .pytest_cache/
 
-# Generated outputs and plots
+# Generated outputs: recorded laps, renders and diagnostic plots
 dnf_diagnosis/
 *_plot.png
+*_lap.npz
 *.mp4
+*.gif
+
+# ...except curated media shown in the README
+!assets/
+!assets/**

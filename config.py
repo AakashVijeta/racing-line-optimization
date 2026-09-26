@@ -30,6 +30,31 @@ TRACK_WIDTHS = {
 
 DEFAULT_TRACK_WIDTH = 15.0
 
+# Held out of training. Validation tracks drive best-model selection during
+# training, so only the test track gives an unbiased generalization result.
+VAL_TRACKS = ["mc-1929", "be-1925"]   # Monaco, Spa
+TEST_TRACKS = ["jp-1962"]             # Suzuka
+TRAIN_TRACKS = [t for t in TRACK_IDS if t not in VAL_TRACKS + TEST_TRACKS]
+
+
+# Procedural tracks (track_generator.py). Fixed seeds so every run and every
+# evaluation sees the same pools. Test tracks are never used for training or
+# checkpoint selection.
+PROC_SEEDS = {"train": 100, "val": 200, "test": 300}
+PROC_SIZES = {"train": 400, "val": 16, "test": 50}
+
+
+def track_split(track_id):
+    """Return 'test', 'val' or 'train' for a track ID (real or procedural)."""
+    if track_id.startswith("proc-"):
+        seed = int(track_id.split("-")[1])
+        return {v: k for k, v in PROC_SEEDS.items()}.get(seed, "train")
+    if track_id in TEST_TRACKS:
+        return "test"
+    if track_id in VAL_TRACKS:
+        return "val"
+    return "train"
+
 # --- Model Paths ---
 
 MODEL_PATHS = {
@@ -37,9 +62,19 @@ MODEL_PATHS = {
     "v11": "./models/sac_v11/best_model/best_model.zip",
     "v12": "./models/sac_v12/best_model/best_model.zip",
     "v13": "./models/sac_v13/best_model/best_model.zip",
+    # Replace with the top pick from `python checkpoint_sweep.py --run sac_v14`
+    "v14": "./models/sac_v14/best_model/best_model.zip",
+    # Best validation checkpoint, at 2.0M steps (the run was stopped at 3.6M)
+    "v15b": "./models/sac_v15b/best_model/best_model.zip",
 }
 
-DEFAULT_MODEL_VERSION = "v13"
+DEFAULT_MODEL_VERSION = "v15b"
+
+# Observation layout each model was trained with (see RacingEnv's obs_version):
+# 1 = vertex-snapped lookahead/boundaries, 2 = interpolated/segment-accurate,
+# 3 = adds track width, previous action and signed curvature.
+OBS_VERSIONS = {"v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 2, "v15b": 3}
+LATEST_OBS_VERSION = 3
 
 def get_model_path(version=None):
     """Get the model path for a given version string."""
@@ -47,3 +82,26 @@ def get_model_path(version=None):
     if version not in MODEL_PATHS:
         raise ValueError(f"Unknown model version '{version}'. Available: {list(MODEL_PATHS.keys())}")
     return MODEL_PATHS[version]
+
+
+def model_path_for(version):
+    """Resolve a version key from MODEL_PATHS, or treat the argument as a path."""
+    return get_model_path(version) if version in MODEL_PATHS or version is None else version
+
+
+def obs_version_for(version=None, model=None, override=None):
+    """Observation version for a model key or loaded model.
+
+    Order: explicit override, then the OBS_VERSIONS registry, then the loaded
+    model's input size (68 -> 3, 65 -> 2; version 1 is never guessed, since
+    it has the same size as 2), then the latest version.
+    """
+    if override is not None:
+        return override
+    key = version or DEFAULT_MODEL_VERSION
+    if key in OBS_VERSIONS:
+        return OBS_VERSIONS[key]
+    if model is not None:
+        size = model.observation_space.shape[0]
+        return {68: 3, 65: 2}.get(size, LATEST_OBS_VERSION)
+    return LATEST_OBS_VERSION
