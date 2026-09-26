@@ -160,7 +160,7 @@ There are three fixed pools (`config.PROC_SEEDS` / `PROC_SIZES`): 400 training, 
 ## Getting Started
 
 ### Requirements
-- Python 3.14 (the version everything was developed and tested with; CI runs the tests on it too)
+- Python 3.12+ (developed on 3.14 on macOS; CI runs the tests on 3.12 on Linux, where pygame has prebuilt wheels)
 - A display, for the pygame viewers
 
 ### Installation
