@@ -172,14 +172,13 @@ pip install -r requirements.txt       # or requirements-lock.txt for the exact v
 ```
 
 ### Download the pretrained models
-Trained weights are not in the repository. They are attached to the [`models-v1` release](https://github.com/AakashVijeta/racing-line-optimization/releases/tag/models-v1). Download them to the paths in `config.MODEL_PATHS`:
+Trained weights are not in the repository. The current model, v15b, is attached to the [`models-v1` release](https://github.com/AakashVijeta/racing-line-optimization/releases/tag/models-v1). Download it to the path in `config.MODEL_PATHS`:
 ```bash
-for m in v15b v14 v13; do
-  curl -fL --create-dirs -o models/sac_$m/best_model/best_model.zip \
-    https://github.com/AakashVijeta/racing-line-optimization/releases/download/models-v1/sac_$m.zip
-done
+curl -fL --create-dirs -o models/sac_v15b/best_model/best_model.zip \
+  https://github.com/AakashVijeta/racing-line-optimization/releases/download/models-v1/sac_v15b.zip
 python watch_agent.py                 # watch v15b drive Suzuka
 ```
+The older models in the results tables (v13, v14) are not published.
 Saved SB3 models are pickles, so if one fails to load, install `requirements-lock.txt`.
 
 ### Train
