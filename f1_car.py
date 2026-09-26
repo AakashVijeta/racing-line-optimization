@@ -13,14 +13,10 @@ How it draws
 * Each frame the sprite is rotated with rotozoom (one blit).
 * The two FRONT tyres are drawn per frame, because they turn with the steering.
 
-Usage in replay.py
-------------------
-    from f1_car import F1Car
-    self.car_sprite = F1Car(ppm=self.ppm)                        # in __init__
-
-    # in draw_frame_by_state, replacing self.draw_car(...):
-    self.car_sprite.draw(surface, (self.width / 2, self.height / 2),
-                         ctheta, csteering, braking=(cthrottle < -0.05))
+Usage
+-----
+    car = F1Car(ppm=8.0)
+    car.draw(surface, (x, y), theta, steering, braking=True, shadow_offset=(4, 6))
 """
 import math
 
@@ -84,6 +80,7 @@ class F1Car:
         self._ss = supersample
         self.sprite_off = self._build_sprite(braking=False)
         self.sprite_on = self._build_sprite(braking=True)
+        self.shadow = self._build_shadow(self.sprite_off)
 
     # ------------------------------------------------------------------ sprite
     def _build_sprite(self, braking):
@@ -164,6 +161,17 @@ class F1Car:
 
         return pygame.transform.smoothscale(big, (w // ss, h // ss))
 
+    @staticmethod
+    def _build_shadow(sprite, alpha=110):
+        """Soft dark silhouette of the sprite, for a drop shadow under the car."""
+        w, h = sprite.get_size()
+        shadow = sprite.copy()
+        shadow.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MIN)   # keep only the alpha
+        shadow.fill((0, 0, 0, alpha), special_flags=pygame.BLEND_RGBA_MIN)
+        # Blur by shrinking and growing back
+        small = pygame.transform.smoothscale(shadow, (max(1, w // 6), max(1, h // 6)))
+        return pygame.transform.smoothscale(small, (w, h))
+
     # -------------------------------------------------------------------- draw
     @staticmethod
     def _fill_aa(surface, color, pts):
@@ -174,13 +182,14 @@ class F1Car:
         else:
             pygame.draw.polygon(surface, color, pts)
 
-    def draw(self, surface, center, theta, steering=0.0, braking=False):
+    def draw(self, surface, center, theta, steering=0.0, braking=False, shadow_offset=None):
         """
         surface  : target pygame Surface
         center   : (x, y) screen position of the car's origin (mid-wheelbase)
         theta    : heading in radians (counter-clockwise, as in the sim)
         steering : raw action in [-1, 1]; +1 = full left lock
         braking  : light the rear brake light
+        shadow_offset : (dx, dy) screen offset of a drop shadow, or None for no shadow
         """
         sx, sy = center
         k = self.k
@@ -193,6 +202,10 @@ class F1Car:
         def to_screen(u, v):
             # car frame -> screen (screen y points down, so v is subtracted)
             return sx + k * (u * c - v * s), sy - k * (u * s + v * c)
+
+        if shadow_offset is not None:
+            rot = pygame.transform.rotozoom(self.shadow, math.degrees(theta), 1.0)
+            surface.blit(rot, rot.get_rect(center=(round(sx + shadow_offset[0]), round(sy + shadow_offset[1]))))
 
         # front tyres: rotate each rectangle by the wheel angle about its own centre
         delta = steering * self.max_steer

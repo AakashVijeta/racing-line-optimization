@@ -47,3 +47,5 @@ dnf_diagnosis/
 # ...except curated media shown in the README
 !assets/
 !assets/**
+# Full-length renders are too big for git: attach them to a GitHub release instead
+assets/*.mp4

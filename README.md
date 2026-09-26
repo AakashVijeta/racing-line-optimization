@@ -5,9 +5,9 @@
 
 A Soft Actor-Critic (SAC) agent that learns to drive fast laps around real-world Formula 1 circuits. The car runs in a custom Gymnasium environment with a simplified F1 vehicle model. It is trained on 37 real circuits plus 400 procedurally generated ones, and scored on circuits it never saw during training, including Suzuka.
 
-<!-- To show a demo here, commit a GIF (e.g. assets/lap_snippet.gif produced by export_video.py) and uncomment:
-![Agent lap around Suzuka](assets/lap_snippet.gif)
--->
+![The v15b agent driving Suzuka, a circuit it never saw in training](assets/suzuka_lap.gif)
+
+*The full lap in 1080p60: [suzuka_lap.mp4](https://github.com/AakashVijeta/racing-line-optimization/releases/download/models-v1/suzuka_lap.mp4)*
 
 > **TL;DR:** the current model (`v15b`) finishes **48 of 50 generated tracks it has never seen**, against 21/50 for a model trained only on real circuits, and laps the held-out **Suzuka in 1:27.9**.
 
@@ -144,10 +144,12 @@ There are three fixed pools (`config.PROC_SEEDS` / `PROC_SIZES`): 400 training, 
 ├── checkpoint_sweep.py       # Time-trial and rank a run's checkpoints
 ├── sac_eval.py               # Visual evaluation, cycling through random tracks
 ├── watch_agent.py            # Visual evaluation on one chosen track, with live telemetry
-├── record_lap.py             # Record one lap to suzuka_lap.npz
-├── replay.py                 # Telemetry replay viewer (chase cam, minimap, speed-coloured trail)
-├── f1_car.py                 # Top-down F1 car sprite used by the replay
-├── export_video.py           # Render a replay to lap_full.mp4 + lap_snippet.gif
+├── record_lap.py             # Record one lap (telemetry + track + metadata) to an .npz
+├── lap_render.py             # Broadcast-style lap renderer: chase cam, map, telemetry, G-G diagram
+├── replay.py                 # Interactive replay window
+├── export_video.py           # Render a lap to MP4 + looping GIF + poster PNG
+├── f1_car.py                 # Top-down F1 car sprite
+├── assets/                   # README media and the bundled Titillium Web font (OFL)
 ├── circuits/                 # Source GeoJSON circuit layouts (40), from bacinger/f1-circuits
 ├── tracks/                   # Preprocessed centerlines (.npy cache)
 ├── results/                  # Time-trial results per model (agent_eval.py)
@@ -218,12 +220,12 @@ All of these take `--model` (a key from `config.MODEL_PATHS` or a `.zip` path; t
 
 ### Record, replay and export a lap
 ```bash
-python record_lap.py                          # Suzuka -> suzuka_lap.npz
+python record_lap.py                          # Suzuka with the default model -> suzuka_lap.npz
 python record_lap.py --track be-1925 --out spa_lap.npz
-python replay.py spa_lap.npz                  # interactive replay: SPACE pause, ←/→ seek ±1 s
-python export_video.py spa_lap.npz            # lap_full.mp4 (60 fps) + lap_snippet.gif
+python replay.py spa_lap.npz                  # interactive: SPACE pause, ←/→ seek 1 s (SHIFT: 5 s), R restart
+python export_video.py spa_lap.npz            # assets/spa_lap.mp4 (1080p60) + .gif + .png poster
 ```
-`export_video.py` also takes `--mp4`, `--gif`, `--gif-start` and `--gif-end`. `record_lap.py` saves nothing if the agent fails to finish the lap.
+The video is drawn in a broadcast style: a chase camera with kerbs, the racing line coloured by speed and the line still to come, a speed dial, throttle/brake bars and a G-G diagram, next to a circuit map and speed and pedal traces that fill in over the lap. `lap_render.py` draws every frame at 2× and scales it down for anti-aliasing, and frames are piped straight into ffmpeg. The GIF is cut from the MP4 with a two-pass palette, using the 10 s with the most cornering unless you pass `--gif-start`. `export_video.py` also takes `--width/--height`, `--fps`, `--gif-length`, `--gif-width` and `--skip-mp4` (rebuild only the GIF and poster). `record_lap.py` saves nothing if the agent fails to finish the lap.
 
 ### Tests
 ```bash
