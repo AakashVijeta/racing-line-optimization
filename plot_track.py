@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def make_straight(start_point, end_point, n_points):
     x_start, y_start = start_point
     x_end, y_end = end_point
@@ -74,37 +75,3 @@ def compute_boundaries(centerline, track_width):
 def close_loop(points):
     return np.concatenate([points, points[:1]])
 
-
-def is_on_track(car_x, car_y, centerline, track_width):
-    """
-    Checks if the car is within the track boundaries using true point-to-segment distance.
-    """
-    P = np.array([car_x, car_y])
-    A = centerline
-    B = np.roll(centerline, -1, axis=0)  # Next point for each segment
-    
-    # Vector A to B (the segment)
-    AB = B - A
-    # Vector A to P (car to start of segment)
-    AP = P - A
-    
-    # Project AP onto AB to find the parameterized position 't' of the closest point
-    AB_dot_AB = np.sum(AB * AB, axis=1)
-    AP_dot_AB = np.sum(AP * AB, axis=1)
-    
-    # np.maximum prevents division by zero for duplicate points
-    t = AP_dot_AB / np.maximum(AB_dot_AB, 1e-12)
-    
-    # Clamp 't' between 0 and 1 so we don't project past the ends of the segment
-    t = np.clip(t, 0.0, 1.0)
-    
-    # Calculate the actual closest points on all segments
-    closest_points = A + t[:, np.newaxis] * AB
-    
-    # Find the distances from the car to all closest points
-    distances = np.linalg.norm(P - closest_points, axis=1)
-    
-    # If the absolute minimum distance is less than half the track width, we are on track
-    min_distance = np.min(distances)
-    
-    return min_distance <= (track_width / 2.0)

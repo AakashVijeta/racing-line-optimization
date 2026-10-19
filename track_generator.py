@@ -11,7 +11,7 @@ than MIN_RADIUS, no two parts of the track closer than MIN_SEPARATION).
 """
 import numpy as np
 
-from track_preprocessing import catmull_rom_closed, resample_adaptive
+from track_preprocessing import resample_adaptive
 
 MIN_RADIUS = 9.0          # m, tightest allowed corner (15 m chord scale); Monaco's hairpin is ~10 m
 MIN_SEPARATION = 20.0     # m, between parts of the track more than SEPARATION_ARC apart
@@ -92,8 +92,8 @@ def is_valid(centerline):
     return True, "ok"
 
 
-GEN = dict(n=(18, 33), radius=(350.0, 800.0), noise=0.4, stretch=(1.0, 2.2),
-           sharp_frac=(0.3, 0.6), sharp_offset=(8.0, 30.0))
+GEN = {"n": (18, 33), "radius": (350.0, 800.0), "noise": 0.4, "stretch": (1.0, 2.2),
+       "sharp_frac": (0.3, 0.6), "sharp_offset": (8.0, 30.0)}
 
 
 def _control_points(rng, gen=GEN):

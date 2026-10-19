@@ -1,276 +1,357 @@
 # Racing Line Optimization with Reinforcement Learning
 
-[![tests](https://github.com/AakashVijeta/racing-line-optimization/actions/workflows/tests.yml/badge.svg)](https://github.com/AakashVijeta/racing-line-optimization/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A Soft Actor-Critic (SAC) agent that learns to drive fast laps around real-world Formula 1 circuits. The car runs in a custom Gymnasium environment with a simplified F1 vehicle model. It is trained on 37 real circuits plus 400 procedurally generated ones, and scored on circuits it never saw during training, including Suzuka.
+A Soft Actor-Critic (SAC) agent that learns to drive fast laps of Formula 1 circuits. The car runs in a custom Gymnasium environment with a simplified F1 vehicle model. The agent trains on 37 real circuits plus 400 procedurally generated tracks, and is scored on tracks it never saw in training, including Suzuka.
 
-![The v15b agent driving Suzuka, a circuit it never saw in training](assets/suzuka_lap.gif)
+![The v2 agent driving Suzuka, a circuit it never saw in training](assets/suzuka_lap.gif)
 
 *The full lap in 1080p60: [suzuka_lap.mp4](https://github.com/AakashVijeta/racing-line-optimization/releases/download/models-v1/suzuka_lap.mp4)*
 
-> **TL;DR:** the current model (`v15b`) finishes **48 of 50 generated tracks it has never seen**, against 21/50 for a model trained only on real circuits, and laps the held-out **Suzuka in 1:27.9**.
+> **In short:** the default model, `v2`, finishes **48 of 50 generated tracks it has never seen** and laps the held-out **Suzuka in 1:27.9**. A model trained only on real circuits finishes 21 of those 50 and does not finish Suzuka.
 
----
+## Contents
 
-## Highlights
-
-- **40 real circuits**, loaded from GeoJSON, projected to local metric coordinates, and resampled with more points in tight corners.
-- **Procedural track generator** producing realistic circuits for training, validation and a held-out test set.
-- **Vehicle model** with an F1-like grip limit (traction circle), aerodynamic downforce that grows with speed, drag, and kinematic bicycle steering.
-- **Continuous control**: the agent outputs steering and throttle/brake as two values in `[-1, 1]`.
-- **Generalization tested on holdout tracks**: Suzuka, Monaco, Spa and 50 generated tracks are kept out of training.
-- **Tools** for time trials over every track, checkpoint sweeps, live viewing, lap recording, telemetry replay, and MP4/GIF export.
+- [Results](#results)
+- [How it works](#how-it-works)
+- [Project structure](#project-structure)
+- [Getting started](#getting-started)
+- [Circuits](#circuits)
+- [Limitations](#limitations)
+- [License](#license)
 
 ## Results
 
-One deterministic, standing-start lap per track (`python agent_eval.py --model <m> --procedural test`). The current model, `v15b`, is compared with `v14`, which was trained on the real circuits only:
+Each model drives one deterministic lap from a standing start on every track (`python agent_eval.py --model <m> --procedural test`).
 
-| Laps completed | v14 (real circuits only) | **v15b** (real + procedural) |
+| Laps completed | v1 | v2 (default) | v3 |
+|---|---|---|---|
+| Real, training circuits (37) | 28 | 34 | 33 |
+| Real, validation: Monaco, Spa (2) | 1 | 1 | 1 |
+| Real, test: Suzuka (1) | 0 | 1 | 1 |
+| Generated test tracks (50) | 21 | 48 | 46 |
+| **Total (90)** | **50** | **84** | **81** |
+| Suzuka lap | DNF | 1:27.900 | 1:24.850 |
+| Spa lap | 1:34.000 | 1:40.400 | 1:36.650 |
+
+The three models:
+
+| Model | Training tracks | Checkpoint |
 |---|---|---|
-| Real, train (37) | 28 | **34** |
-| Real, val: Monaco, Spa (2) | 1 | 1 |
-| Real, test: Suzuka (1) | 0 | **1** (1:27.900, avg 238.5 km/h) |
-| Generated test tracks, never seen (50) | 21 | **48** |
+| `v1` | Real circuits only | Best model saved during its run |
+| `v2` | Real circuits plus generated tracks, with domain randomization | 2.0M steps |
+| `v3` | Same settings and seed as `v2` | 3.0M steps |
 
-v15b generalizes far better, but it drives more conservatively. On the tracks both models finish, it is slower on every one: median +5.7% on real circuits (27 tracks) and +5.1% on generated ones (21 tracks). On Spa it runs 1:40.400 against v14's 1:34.000. Its DNFs are Monaco (`mc-1929`), Jeddah (`sa-2021`), Albert Park (`au-1953`) and Mexico City (`mx-1962`), all `off_track`. The v15b model is the best validation checkpoint of its run, at 2.0M steps.
+**Reliability.** `v1` saw only the real circuits and finishes 21 of the 50 unseen generated tracks. `v2` also trained on generated tracks with domain randomization, and finishes 48. Monaco is unfinished by all three models.
 
-Per-track times and splits are in [`results/`](results): [`v15b.csv`](results/v15b.csv), [`v14.csv`](results/v14.csv), and [`v13.csv`](results/v13.csv) for the older real-circuit-only v13 (34/40 circuits, Suzuka 1:24.750, no generated tracks). Suzuka and the 50 generated test tracks are the unbiased generalization results: Monaco, Spa and the generated validation tracks are used to select the best checkpoint during training. The simulation does not model gears, tyre wear or elevation, so these lap times are for comparing runs inside this simulator. They cannot be compared with real F1 lap times.
+**Pace.** `v2` pays for its reliability with speed. On the laps both finish, it is slower than `v1` on every one: a median of 5.7% on real circuits (27 laps) and 5.1% on generated tracks (21 laps). `v3` recovers most of that. It is a median 4.7% faster than `v2` on real circuits and 4.3% faster on generated tracks, which puts it about 1% behind `v1`. It finishes three fewer laps than `v2`.
 
-### What I learned
+**Failures.** `v2` goes off track on Monaco, Jeddah, Albert Park, Mexico City and two generated tracks. `v3` goes off track on Monaco, Shanghai, the Nürburgring, Portimão and two generated tracks, and stalls on Las Vegas and two generated tracks.
 
-- **Entropy can quietly eat the reward.** With SAC's auto-tuned entropy on narrow, randomized tracks, the entropy cost grew until it cancelled the progress reward, and crashing early became the best policy. Capping the coefficient fixed it (see [Training](#5-training-sac_trainpy)).
-- **A penalty the agent can postpone is a discounted penalty.** Stopping before a hard corner and waiting for the stall timeout cost less than crashing, so several models learned to park. The stall rule now fires fast enough that parking is always worse (see [Reward](#3-environment-racing_envpy)).
-- **Generalization needs varied data, not more laps of the same tracks.** Adding generated tracks and domain randomization took unseen-track completion from 21/50 to 48/50.
-- **An SB3 checkpoint is not the whole training state.** The replay buffer isn't saved, so a resumed run trained on a narrow buffer and its validation score dropped sharply.
+Per-track times are in [`results/`](results). Suzuka and the 50 generated test tracks are the unbiased generalization results: Monaco, Spa and the generated validation tracks are used to pick the best checkpoint during training.
 
-## How It Works
+The simulator has no gears, tyre wear or elevation, so these lap times are for comparing models inside this simulator. They are not comparable with real F1 lap times.
+
+### What the training runs showed
+
+- **Training is reproducible, to the bit.** `v3` was started with the same seed and settings as `v2` on the same machine. Its reward curve, entropy coefficient and validation scores match `v2` exactly for the first 2.95M steps.
+- **A checkpoint is not the whole training state.** The `v2` run was interrupted at 2.95M steps and continued from a checkpoint, which does not include the replay buffer. Over the next 600k steps it finished 9–16 of 18 validation laps, where the uninterrupted `v3` run finished 14–17. The trainer has no resume option for this reason.
+- **The policy is unstable between checkpoints.** A sweep of the `v3` run on 106 tracks, one checkpoint every 100k steps, gives 99, 89, 93 and 55 laps for four consecutive checkpoints (3.1M to 3.4M). The 2.5M checkpoint finishes 11. Which checkpoint is picked matters as much as how long the run trains.
+- **More training did not help.** The best checkpoint in that sweep is at 2.0M steps (100 of 106 laps), and nothing after 3.9M finishes more than 93.
+- **Two real validation tracks are too few.** The 3.4M checkpoint scored 16/18 in validation but finished 7 of the 37 real training circuits. `checkpoint_sweep.py` exists to catch this.
+- **Entropy can eat the reward.** SAC adds an entropy term to every step's reward. In an earlier run with the auto-tuned coefficient left uncapped, that cost grew until it cancelled the progress reward, and the policy collapsed into stalling and crashing. With the coefficient capped at 0.02, the term costs 0.01–0.03 per step against about 0.3 of driving reward.
+- **A penalty the agent can postpone is a discounted penalty.** Braking to a stop before a hard corner delays the stall penalty, and a delayed penalty is worth less. The stall rule is sized so that stopping is still worse than crashing (see [Reward](#reward)). Parking is not gone: after 2M steps of the `v3` run, about 13% of training episodes still end in a stall, with spikes near 70%.
+
+## How it works
 
 ```
-circuits/*.geojson ──► track_preprocessing.py ──► tracks/*.npy ──► RacingEnv (racing_env.py)
-  (lon/lat lines)       project · dedupe ·         (centerline      │  Car (car.py)
-                        adaptive resample           in metres)      ▼
-                                                               SAC agent (sac_train.py)
+circuits/*.geojson ──► track_preprocessing.py ──► tracks/*.npy ──┐
+  (lon/lat lines)       project · spline ·        (centerline    ├──► RacingEnv ──► SAC agent
+                        adaptive resample          in metres)    │    (racing_env.py,  (sac_train.py)
+track_generator.py ──► random control polygons, same pipeline ───┘     car.py)
 ```
 
 ### 1. Track preprocessing (`track_preprocessing.py`)
-- Loads the `LineString` centerline from each GeoJSON file.
-- Converts longitude/latitude to local metres with an equirectangular projection around the first point.
-- Removes duplicate points, including the repeated closing point, which would otherwise create a fake curvature spike at the start/finish line.
-- Fits a **centripetal Catmull-Rom spline** through the raw points. The GeoJSON points are 12–38 m apart, so a plain polyline would have zero curvature along each segment and a kink at every vertex.
-- **Resamples by curvature**: point density is `1 + 3·κ_normalized`, with curvature smoothed over about 20 m and wrapping around the loop. The point count is set so straights get 5 m spacing and the tightest corners about 1.25 m (926–1,645 points per track).
-- Caches the result to `tracks/<id>.npy`. `tracks/manifest.json` records the preprocessing version and settings used for each file, and `prepare_tracks()` rebuilds any track that is missing or out of date. To rebuild everything, run `python track_preprocessing.py --force`.
+
+- Loads the `LineString` centerline from each GeoJSON file and projects longitude and latitude to local metres (equirectangular, around the first point).
+- Removes duplicate points, including the repeated closing point, which would otherwise add a zero-length segment and a false curvature spike at the start line.
+- Fits a centripetal Catmull-Rom spline through the points. The source points are roughly 20 m apart, so a plain polyline would have zero curvature along each segment and a kink at every vertex.
+- Resamples by curvature. Point density is `1 + 3 × normalized curvature`, with curvature smoothed over 20 m around the loop. Straights get 5 m between points and the tightest corner of each track gets 1.25 m. The 40 circuits end up with 926 to 1,645 points each.
+- Caches each result in `tracks/<id>.npy`. `tracks/manifest.json` records the preprocessing version and spacing, and `prepare_tracks()` rebuilds any track that is missing or out of date.
 
 ### 2. Vehicle model (`car.py`)
+
 | Parameter | Value | Notes |
 |---|---|---|
-| Wheelbase `L` | 3.5 m | Kinematic bicycle model |
-| Base lateral grip | 44.1 m/s² (~4.5 G) | Mechanical grip |
-| Downforce | `+0.005·v²` | ~7 G total at 250 km/h |
-| Drag | `0.0022·v²` | Top speed ~340 km/h |
-| Max throttle / brake | +20 / −40 m/s² | Mapped from action `[-1, 1]` |
-| Max steering | ±0.4 rad | |
+| Wheelbase | 3.5 m | Kinematic bicycle model |
+| Base grip | 44.1 m/s² (about 4.5 g) | Mechanical grip |
+| Downforce | `+ 0.005 v²` m/s² | About 7 g in total at 250 km/h |
+| Drag | `0.0022 v²` m/s² | Top speed about 340 km/h |
+| Throttle / brake | +20 / −40 m/s² | Mapped from the action |
+| Steering | ±0.4 rad | Mapped from the action |
 
-At each step, the combined longitudinal and lateral acceleration demand is capped to a **traction circle** whose radius depends on speed. The steering angle the car actually achieves is worked back from the lateral acceleration left over after that cap.
+At each step the combined longitudinal and lateral acceleration demand is capped to a traction circle whose radius grows with speed. The steering angle the car achieves is worked back from the lateral acceleration left after that cap. The simulation runs at 20 Hz (`dt = 0.05 s`).
 
 ### 3. Environment (`racing_env.py`)
-A `gymnasium.Env` that picks a track from the pool at every `reset()`, uniformly or by weights (`set_track_weights`). Pass `options={"track": id}` to choose one.
 
-**Observation.** There are three layouts (`obs_version`). The model registry in `config.OBS_VERSIONS` picks the right one for each model.
+A `gymnasium.Env` that picks a track from its pool at every `reset()`, uniformly or by weight (`set_track_weights`). Pass `options={"track": id}` to choose one.
 
-| Version | Models | Size | Contents |
-|---|---|---|---|
-| 1 | v10–v13 | 65 | speed, lateral offset, heading error; 20 lookahead points (distance, angle, \|curvature\|) snapped to centerline vertices; distance to each edge measured to the nearest boundary vertex |
-| 2 | v14 | 65 | same, but lookahead points are interpolated along the centerline and edge distances are measured to the nearest boundary segment |
-| 3 | v15+ | 68 | version 2 plus the absolute track width, the previous action, and **signed** curvature (left vs right) |
+**Observation** (68 values in the current layout):
 
-Lookahead points are 10 m apart, covering 200 m.
+| Values | Contents |
+|---|---|
+| 3 | Speed, lateral offset from the centerline, heading error |
+| 3 | Track width, previous steering, previous throttle |
+| 60 | 20 lookahead points, 10 m apart (200 m ahead): distance, relative angle, signed curvature |
+| 2 | Distance to the left and right track edges |
 
-**Action**: `[steering, throttle]`, each in `[-1, 1]`. Negative throttle brakes.
+Lookahead points are interpolated along the centerline, and edge distances are measured to the nearest boundary segment. The environment still supports two older layouts through `obs_version`: version 2 (65 values, no width or previous action, unsigned curvature) is what `v1` uses, and version 1 is an earlier vertex-based variant. `v2` and `v3` use version 3.
 
-**Reward**: all terms are per metre, so the scale is the same on short and long tracks.
-- `+0.1` per metre of progress along the centerline
-- a time penalty that breaks even at 6 m/s
-- a penalty on steering changes between steps, to reduce jitter
-- `−45` and end of episode for going off track or driving backwards
-- `−75` and end of episode for stalling: under 2 m/s for 0.25 s (after a 3 s grace period), or under 5 m of progress in 10 s. A penalty the agent can postpone gets discounted, so it must beat a crash even after the longest delay available: braking from about 90 m/s takes about 2.3 s, and −75 × 0.995⁵⁰ ≈ −58 < −45. Earlier versions used a 2 s window and −60, which discounted to about −45: a tie with crashing. Models learned to brake to a stop before hard corners (v13 on Miami, v14 on Bahrain, and v15/v15b in some training episodes). v15b was trained under that older rule. It is evaluated under the current one, and no model trained with the new rule has been through a full run yet.
-- `+10` for completing a lap
+**Action:** `[steering, throttle]`, each in `[-1, 1]`. Negative throttle brakes.
 
-**Domain randomization** (`randomize=True`, training only). Each episode:
-- scales the track width by 0.7–1.2× (clamped to 8–16 m);
-- mirrors the track and/or drives it in reverse, each with probability 0.5;
-- starts at a random point on the lap, up to 30% of the half-width off the centerline, with small heading noise, at up to 80% of the speed the next 150 m of corners allows.
+#### Reward
 
-With a random start, a lap is one full track length of progress. Evaluation always uses the standard standing start.
+All terms are per metre, so the scale is the same on short and long tracks.
 
-The nearest centerline point is searched within a ±30-point window of the previous one. This stops the car's position from jumping to the other side of a figure-of-eight crossover such as the one at Suzuka.
+| Event | Reward |
+|---|---|
+| Progress along the centerline | +0.1 per metre |
+| Time | −0.03 per step, which breaks even at 6 m/s |
+| Steering change between steps | −0.045 × the change in the steering action |
+| Off track, or driving backwards | −45, episode ends |
+| Stalled | −75, episode ends |
+| Lap completed | +10, episode ends |
+
+The car counts as stalled when it is under 2 m/s for 0.25 s (after a 3 s grace period from the start), or makes under 5 m of progress in 10 s. The stall penalty has to beat a crash even after the longest delay the agent can buy by braking: from about 90 m/s that is 2.3 s, and −75 × 0.995⁵⁰ ≈ −58, which is still below −45.
+
+An episode is also cut off once it has run 10 s longer than a lap at 12 m/s would take.
+
+#### Domain randomization
+
+With `randomize=True` (training only), each episode:
+
+- scales the track width by 0.7–1.2×, clamped to 8–16 m;
+- reverses the direction of travel and mirrors the track, each with probability 0.5;
+- starts at a random point on the lap, up to 30% of the half-width off the centerline, with up to 0.1 rad of heading error, at up to 80% of the speed the next 150 m of corners allows.
+
+With a random start, a lap is one full track length of progress. Evaluation always uses the standing start at the start line.
+
+The nearest centerline point is searched within ±30 points of the previous one. That stops the car's position from jumping across a crossover such as the one at Suzuka.
 
 ### 4. Procedural tracks (`track_generator.py`)
-Random control polygons with added tight corners, passed through the same spline and resampling pipeline as the real circuits. A track is rejected if it crosses itself, has a corner tighter than 9 m radius, is outside 3–7 km, or has two parts closer than 20 m. The generated set is tuned to resemble the real circuits (medians):
 
-| | Tightest corner | Lap below 100 m radius | Corners | Straights |
-|---|---|---|---|---|
-| Real circuits | 15.4 m | 17.8% | 20 | 61% |
-| Generated | 12.2 m | 16.5% | 18 | 48% |
+A track starts as a random control polygon: a noisy, stretched loop of 18–32 points, with some points split into close pairs to make hairpins and chicanes. It then goes through the same spline and resampling as the real circuits. A candidate is rejected if it:
 
-There are three fixed pools (`config.PROC_SEEDS` / `PROC_SIZES`): 400 training, 16 validation and 50 test tracks, with widths of 8–16 m. The test pool is never used for training or checkpoint selection. As a baseline, v14 (trained only on real circuits) finishes 28/37 of its training circuits but only **21/50** unseen generated tracks with the current car model, against **48/50** for v15b (see [Results](#results)).
+- is shorter than 3 km or longer than 7 km;
+- crosses itself;
+- has a corner tighter than 9 m radius;
+- brings two separate parts of the track within 20 m of each other.
+
+Each track gets a width between 8 and 16 m. There are three fixed pools, set by seed in `config.py`: 400 training tracks, 16 validation tracks and 50 test tracks. The test pool is never used for training or checkpoint selection.
 
 ### 5. Training (`sac_train.py`)
-- Stable-Baselines3 SAC, `MlpPolicy` with `[512, 512, 256]` hidden layers, 8 parallel `SubprocVecEnv` workers
-- `γ = 0.995`, batch 512, replay buffer 2M, 10k random warm-up steps
-- **Entropy**: auto-tuned from 0.02, with target entropy −4 (`--target-entropy`) and a hard cap of 0.02 (`--max-ent-coef`). Without the cap, the first v15 run collapsed. On narrow, randomized tracks the policy kept trying to be more precise than the default target (−2) allows, so the coefficient climbed. By 2M steps the entropy cost (−α·log π, about −0.13 per step) had cancelled the progress reward (about +0.13 per step), and stopping or crashing early became the best option.
-- **Learning rate** decays linearly from 3e-4 to 3e-5
-- **Gradient steps**: 2 per vectorized step (0.25 updates per sample; v14 used 0.125). This runs at about 455 fps (about 5 h for 8M steps), against 866 fps with `--gradient-steps 1`.
-- **Training mix**: the 37 real training circuits plus 400 generated tracks, half the episodes each (`--proc-frac`), with domain randomization
-- **Adaptive sampling**: each real circuit is sampled in proportion to 0.5 + its recent failure rate, so hard tracks get more practice
-- **Model selection**: every 100k steps the policy drives one lap on each validation track (Monaco, Spa and 16 generated). Each lap scores 1 + average speed/100 if finished, or the fraction of the lap covered if not. The best mean score is saved to `best_model/`, and every score is logged to `validation_history.csv`.
-- TensorBoard logs lap-completion rate and mean progress separately for real and generated tracks (`train_real/`, `train_proc/`, `val_*`). These are more useful than `ep_rew_mean`, which mostly reflects track length.
-- Training stops early if the entropy coefficient goes above 0.35. This only matters with the cap disabled (`--max-ent-coef 0`).
-- Each run writes to `models/<run>/`, including `train_config.json` with its settings and the git commit it was trained from, and the script refuses to start if that directory already exists, unless `--resume` is passed
-- **Resuming** (`--resume`) continues from the newest checkpoint with the run's saved settings, so the learning-rate schedule picks up where it stopped. The best validation score is read back from `validation_history.csv`, so a worse model never replaces `best_model/`. The replay buffer is not saved in checkpoints. The policy drives for `--refill` steps (default 100k) with no updates to refill it, but training still runs on far less varied data than before. When v15b was resumed at 2.95M steps, validation fell from 15–17/18 to 9–13/18 laps. A crashed run is often better restarted from scratch.
 
-## Project Structure
+- **Algorithm:** Stable-Baselines3 SAC with an MLP policy of `[512, 512, 256]` hidden units, on 8 parallel environments.
+- **Hyperparameters:** discount 0.995, batch size 512, replay buffer of 2M transitions, 10k warm-up steps, 2 gradient steps per vectorized step.
+- **Learning rate:** linear decay from 3e-4 to 3e-5 over the run.
+- **Entropy:** auto-tuned from 0.02 with a target entropy of −4 and a hard cap of 0.02. Training stops early if the coefficient passes 0.35, which can only happen with the cap disabled.
+- **Training mix:** half the episodes on the 37 real training circuits and half on the 400 generated tracks, with domain randomization.
+- **Adaptive sampling:** each real circuit is sampled in proportion to 0.5 plus its recent failure rate, so hard circuits get more practice.
+- **Model selection:** every 100k steps the policy drives one lap on each of the 18 validation tracks (Monaco, Spa and 16 generated). A finished lap scores 1 + average speed / 100 m/s, and an unfinished lap scores the fraction covered. The best mean score is saved to `best_model/`, and every score is appended to `validation_history.csv`.
+- **Checkpoints:** every 50k steps, in `models/<run>/checkpoints/`.
+- **Logging:** TensorBoard gets lap-completion rate and mean progress separately for real and generated tracks, and the share of episodes ending in each termination reason. These say more than the mean episode reward, which mostly reflects track length.
+- **Run record:** each run writes `models/<run>/train_config.json` with its settings and the git commit it was trained from. The script refuses to start if the run directory already exists.
+
+On an Apple M5 laptop this runs at about 380 steps per second, so the default 8M steps take roughly 6 hours.
+
+## Project structure
 
 ```
 .
 ├── config.py                 # Track IDs, widths, train/val/test split, model registry
-├── car.py                    # Vehicle dynamics model
-├── racing_env.py             # Gymnasium environment
-├── track_preprocessing.py    # GeoJSON → metric centerline pipeline, curvature
-├── track_generator.py        # Procedural track generator and fixed train/val/test pools
-├── plot_track.py             # Geometry helpers: boundaries, oval generator, on-track check
-├── sac_train.py              # SAC training (real + procedural tracks, randomization)
-├── agent_eval.py             # Headless time trial on all tracks → leaderboard CSV
-├── checkpoint_sweep.py       # Time-trial and rank a run's checkpoints
-├── sac_eval.py               # Visual evaluation, cycling through random tracks
-├── watch_agent.py            # Visual evaluation on one chosen track, with live telemetry
-├── record_lap.py             # Record one lap (telemetry + track + metadata) to an .npz
-├── lap_render.py             # Broadcast-style lap renderer: chase cam, map, telemetry, G-G diagram
-├── replay.py                 # Interactive replay window
-├── export_video.py           # Render a lap to MP4 + looping GIF + poster PNG
-├── f1_car.py                 # Top-down F1 car sprite
-├── assets/                   # README media and the bundled Titillium Web font (OFL)
-├── circuits/                 # Source GeoJSON circuit layouts (40), from bacinger/f1-circuits
-├── tracks/                   # Preprocessed centerlines (.npy cache)
-├── results/                  # Time-trial results per model (agent_eval.py)
-├── tests/                    # pytest suite
-└── .github/workflows/        # CI: runs the tests on every push
+├── car.py                    # Vehicle model
+├── racing_env.py             # Gymnasium environment and the shared lap-driving helper
+├── track_preprocessing.py    # GeoJSON → metric centerline, curvature
+├── track_generator.py        # Procedural tracks and the fixed train/val/test pools
+├── plot_track.py             # Geometry helpers: track boundaries, test oval
+├── sac_train.py              # SAC training
+├── agent_eval.py             # Time trial on every track → results CSV
+├── checkpoint_sweep.py       # Time-trial and rank the checkpoints of a run
+├── sac_eval.py               # Watch the agent on random tracks
+├── watch_agent.py            # Watch the agent on one track, with live telemetry
+├── record_lap.py             # Record one lap to an .npz file
+├── lap_render.py             # Lap video renderer
+├── f1_car.py                 # Top-down car sprite for the renderer
+├── replay.py                 # Interactive replay of a recorded lap
+├── export_video.py           # Render a recorded lap to MP4, GIF and a poster PNG
+├── assets/                   # README media and the Titillium Web font
+├── circuits/                 # Source GeoJSON circuit layouts (40)
+├── tracks/                   # Preprocessed centerlines (cache)
+├── results/                  # Time-trial results per model
+└── tests/                    # pytest suite
 ```
 
-## Getting Started
+## Getting started
 
 ### Requirements
-- Python 3.12+ (developed on 3.14 on macOS; CI runs the tests on 3.12 on Linux, where pygame has prebuilt wheels)
-- A display, for the pygame viewers
+
+- Python 3.12 or newer. The project is developed on Python 3.14 on macOS and has also been tested on Python 3.12 on Linux.
+- A display, for the pygame viewers. Training, time trials and video export run headless.
 
 ### Installation
+
 ```bash
 git clone https://github.com/AakashVijeta/racing-line-optimization.git
 cd racing-line-optimization
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt       # or requirements-lock.txt for the exact versions used
+pip install -r requirements.txt
 ```
 
-### Download the pretrained models
-Trained weights are not in the repository. The current model, v15b, is attached to the [`models-v1` release](https://github.com/AakashVijeta/racing-line-optimization/releases/tag/models-v1). Download it to the path in `config.MODEL_PATHS`:
-```bash
-curl -fL --create-dirs -o models/sac_v15b/best_model/best_model.zip \
-  https://github.com/AakashVijeta/racing-line-optimization/releases/download/models-v1/sac_v15b.zip
-python watch_agent.py                 # watch v15b drive Suzuka
-```
-The older models in the results tables (v13, v14) are not published.
-Saved SB3 models are pickles, so if one fails to load, install `requirements-lock.txt`.
+`requirements-lock.txt` has the exact versions the models were trained with.
+
+### Models
+
+Trained weights are not included in the repository, so train a model before running the evaluation scripts.
+
+Every script that loads a model takes `--model`, which is either a key from `MODEL_PATHS` in `config.py` or the path to a `.zip` file. Without it, the scripts load `DEFAULT_MODEL_VERSION`, which is `v2` and expects `models/sac_v2/best_model/best_model.zip`.
+
+To refer to a new model by name, add it to `MODEL_PATHS` and `OBS_VERSIONS` in `config.py`. For a `.zip` path the observation layout is inferred from the model's input size, and `--obs-version` overrides it.
 
 ### Train
+
 ```bash
-python sac_train.py --run sac_v16                         # defaults: real + procedural, randomized (v15b's settings)
-python sac_train.py --run sac_v16 --proc-frac 0.7 --timesteps 10000000
-python sac_train.py --run sac_v16 --resume                # continue an interrupted run
-tensorboard --logdir tb_logs                               # monitor progress
+python sac_train.py --run sac_v4
+python sac_train.py --run sac_v4 --proc-frac 0.7 --timesteps 10000000
+tensorboard --logdir tb_logs
 ```
-Options:
-- `--timesteps` (default 8M), `--n-envs` (8), `--seed` (0)
-- `--proc-frac` (0.5; 0 trains on real circuits only), `--proc-train` (number of generated tracks)
-- `--no-randomize`, `--no-adaptive`
-- `--lr` / `--lr-final`, `--gradient-steps` (2), `--eval-freq` (100k)
-- `--target-entropy` (−4), `--max-ent-coef` (0.02; 0 disables the cap)
-- `--warm-start` (must use the same observation layout)
-- `--resume` (continue `models/<run>/` from its latest checkpoint with its saved settings; `--timesteps` can extend the run), `--refill` (100k; steps collected before updates restart)
 
-Training takes hours. Launch it with `nohup python -u sac_train.py ... > logs/<run>.log 2>&1 &` so it survives closing the terminal or editor.
+| Option | Default | Meaning |
+|---|---|---|
+| `--run` | required | Run name; outputs go to `models/<run>/` |
+| `--timesteps` | 8,000,000 | Total environment steps |
+| `--n-envs` | 8 | Parallel environments |
+| `--seed` | 0 | Random seed |
+| `--proc-frac` | 0.5 | Share of episodes on generated tracks; 0 trains on real circuits only |
+| `--proc-train` | 400 | Number of generated training tracks |
+| `--no-randomize` | off | Disable domain randomization |
+| `--no-adaptive` | off | Sample real circuits uniformly |
+| `--lr`, `--lr-final` | 3e-4, 3e-5 | Learning rate at the start and end |
+| `--gradient-steps` | 2 | Gradient steps per vectorized step |
+| `--eval-freq` | 100,000 | Steps between validation runs |
+| `--target-entropy` | −4 | SAC entropy target |
+| `--max-ent-coef` | 0.02 | Cap on the entropy coefficient; 0 disables it |
+| `--warm-start` | none | Model whose policy weights initialise training |
 
-Checkpoints go to `models/<run>/checkpoints/` and the best model to `models/<run>/best_model/`. To evaluate the new model by name, add it to `MODEL_PATHS` in `config.py`, or pass the `.zip` path to `--model`.
+A run takes hours and cannot be resumed, so start it in a way that survives closing the terminal:
+
+```bash
+nohup python -u sac_train.py --run sac_v4 > logs/sac_v4.log 2>&1 &
+```
 
 ### Evaluate
+
 ```bash
-python agent_eval.py                          # headless time trial on all 40 circuits -> results/v15b.csv
-python agent_eval.py --procedural test        # ...plus the 50 held-out generated tracks
+python agent_eval.py                          # default model on the 40 circuits → results/v2.csv
+python agent_eval.py --procedural test        # ...plus the 50 generated test tracks
+python agent_eval.py --model models/sac_v4/best_model/best_model.zip --procedural test
 python watch_agent.py --track mc-1929         # watch one track (default: Suzuka)
 python sac_eval.py                            # watch laps on random tracks
 ```
-To choose a checkpoint from a training run, time-trial several of them:
-```bash
-python checkpoint_sweep.py --run sac_v15b                  # every 250k steps from 2M, plus best/final
-python checkpoint_sweep.py --run sac_v15b --proc-test --workers 4
-```
-The sweep ranks checkpoints by laps completed on real train and val circuits plus the generated validation tracks, then by mean lap time on tracks every candidate finished. Suzuka and the generated test tracks (`--proc-test`) are reported but never used for ranking, so they stay fair tests of generalization. Results go to `models/<run>/checkpoint_sweep.csv`.
 
-All of these take `--model` (a key from `config.MODEL_PATHS` or a `.zip` path; the default is `DEFAULT_MODEL_VERSION`, currently `v15b`). `agent_eval.py` writes to `results/<model>.csv` unless you pass `--out`. They also take `--obs-version`, which overrides the observation layout inferred from the model: the registry for named models, the input size for `.zip` paths (68 → 3, 65 → 2). Version 1 is never guessed, so pass `--obs-version 1` for an unregistered pre-v14 model.
+`agent_eval.py` prints a leaderboard and writes it to `results/<model>.csv`, or to the path given with `--out`.
+
+### Pick a checkpoint
+
+```bash
+python checkpoint_sweep.py --run sac_v4
+python checkpoint_sweep.py --run sac_v4 --start 2000000 --every 100000 --proc-test --workers 8
+```
+
+The sweep time-trials checkpoints of a run (every 250k steps from 2M by default) plus its best and final models, on the 40 real circuits and the 16 generated validation tracks. It ranks them by laps completed on the training and validation tracks, then by mean lap time on the tracks every contender finished. A contender is a candidate within 10% of the most laps. Suzuka and the generated test tracks (`--proc-test`) are reported but never used for ranking. Results go to `models/<run>/checkpoint_sweep.csv`.
 
 ### Record, replay and export a lap
+
 ```bash
-python record_lap.py                          # Suzuka with the default model -> suzuka_lap.npz
+python record_lap.py                          # Suzuka with the default model → suzuka_lap.npz
 python record_lap.py --track be-1925 --out spa_lap.npz
-python replay.py spa_lap.npz                  # interactive: SPACE pause, ←/→ seek 1 s (SHIFT: 5 s), R restart
-python export_video.py spa_lap.npz            # assets/spa_lap.mp4 (1080p60) + .gif + .png poster
+python replay.py spa_lap.npz                  # SPACE pause, ←/→ seek 1 s (SHIFT: 5 s), R restart, ESC quit
+python export_video.py spa_lap.npz            # assets/spa_lap.mp4, .gif and .png
 ```
-The video is drawn in a broadcast style: a chase camera with kerbs, the racing line coloured by speed and the line still to come, a speed dial, throttle/brake bars and a G-G diagram, next to a circuit map and speed and pedal traces that fill in over the lap. `lap_render.py` draws every frame at 2× and scales it down for anti-aliasing, and frames are piped straight into ffmpeg. The GIF is cut from the MP4 with a two-pass palette, using the 10 s with the most cornering unless you pass `--gif-start`. `export_video.py` also takes `--width/--height`, `--fps`, `--gif-length`, `--gif-width` and `--skip-mp4` (rebuild only the GIF and poster). `record_lap.py` saves nothing if the agent fails to finish the lap.
+
+`record_lap.py` saves nothing if the agent does not finish the lap.
+
+The video shows a top-down chase camera, on black, of the track with white edge blocks and the racing line coloured by speed (red when slow, green flat out). Beside it are the lap time and sector times, the speed on its colour scale, a brake and throttle bar, the circuit map and a speed graph. Frames are drawn at twice the output size and scaled down for anti-aliasing, then piped into ffmpeg. The GIF is cut from the MP4, by default from the 10 seconds with the most cornering. `export_video.py` takes `--width`, `--height`, `--fps`, `--gif-start`, `--gif-length`, `--gif-width` and `--skip-mp4`, among others.
 
 ### Tests
+
 ```bash
 pytest
 ```
 
 ## Circuits
 
-| ID | Circuit | ID | Circuit |
-|---|---|---|---|
-| `ae-2009` | Yas Marina | `it-1914` | Mugello |
-| `ar-1952` | Buenos Aires (Gálvez) | `it-1922` | Monza |
-| `at-1969` | Red Bull Ring | `it-1953` | Imola |
-| `au-1953` | Albert Park | `jp-1962` | Suzuka *(test holdout)* |
-| `az-2016` | Baku City Circuit | `mc-1929` | Monaco *(validation holdout)* |
-| `be-1925` | Spa-Francorchamps *(validation holdout)* | `mx-1962` | Hermanos Rodríguez |
-| `bh-2002` | Bahrain International | `my-1999` | Sepang |
-| `br-1940` | Interlagos | `nl-1948` | Zandvoort |
-| `br-1977` | Jacarepaguá | `pt-1972` | Estoril |
-| `ca-1978` | Gilles-Villeneuve | `pt-2008` | Portimão |
-| `cn-2004` | Shanghai International | `qa-2004` | Losail |
-| `de-1927` | Nürburgring | `ru-2014` | Sochi Autodrom |
-| `de-1932` | Hockenheimring | `sa-2021` | Jeddah Corniche |
-| `es-1991` | Barcelona-Catalunya | `sg-2008` | Marina Bay |
-| `es-2026` | Madring (Madrid) | `tr-2005` | Istanbul Park |
-| `fr-1960` | Magny-Cours | `us-1909` | Indianapolis |
-| `fr-1969` | Paul Ricard | `us-1956` | Watkins Glen |
-| `gb-1948` | Silverstone | `us-2012` | Circuit of the Americas |
-| `hu-1986` | Hungaroring | `us-2022` | Miami |
-| | | `us-2023` | Las Vegas |
-| | | `za-1961` | Kyalami |
+| ID | Circuit | Width (m) | Length (km) | Split |
+|---|---|---|---|---|
+| `ae-2009` | Yas Marina Circuit | 14 | 5.30 | train |
+| `ar-1952` | Autódromo Oscar y Juan Gálvez | 12 | 4.31 | train |
+| `at-1969` | Red Bull Ring | 12 | 4.31 | train |
+| `au-1953` | Albert Park Circuit | 12 | 5.28 | train |
+| `az-2016` | Baku City Circuit | 10 | 5.96 | train |
+| `be-1925` | Circuit de Spa-Francorchamps | 14 | 6.99 | val |
+| `bh-2002` | Bahrain International Circuit | 15 | 5.43 | train |
+| `br-1940` | Autódromo José Carlos Pace - Interlagos | 12 | 4.31 | train |
+| `br-1977` | Autódromo Internacional Nelson Piquet | 12 | 4.98 | train |
+| `ca-1978` | Circuit Gilles-Villeneuve | 12 | 4.37 | train |
+| `cn-2004` | Shanghai International Circuit | 15 | 5.46 | train |
+| `de-1927` | Nürburgring | 13 | 5.15 | train |
+| `de-1932` | Hockenheimring | 13 | 4.56 | train |
+| `es-1991` | Circuit de Barcelona-Catalunya | 14 | 4.67 | train |
+| `es-2026` | Circuito de Madring | 12 | 5.45 | train |
+| `fr-1960` | Circuit de Nevers Magny-Cours | 11.5 | 4.47 | train |
+| `fr-1969` | Circuit Paul Ricard | 15 | 5.83 | train |
+| `gb-1948` | Silverstone Circuit | 15 | 5.89 | train |
+| `hu-1986` | Hungaroring | 11 | 4.38 | train |
+| `it-1914` | Autodromo Internazionale del Mugello | 13 | 5.25 | train |
+| `it-1922` | Autodromo Nazionale Monza | 14 | 5.79 | train |
+| `it-1953` | Autodromo Enzo e Dino Ferrari | 11 | 4.91 | train |
+| `jp-1962` | Suzuka International Racing Course | 12 | 5.82 | test |
+| `mc-1929` | Circuit de Monaco | 8.5 | 3.33 | val |
+| `mx-1962` | Autódromo Hermanos Rodríguez | 12 | 4.31 | train |
+| `my-1999` | Sepang International Circuit | 15 | 5.56 | train |
+| `nl-1948` | Circuit Zandvoort | 10 | 4.27 | train |
+| `pt-1972` | Autódromo do Estoril | 11 | 4.18 | train |
+| `pt-2008` | Autódromo Internacional do Algarve | 14 | 4.66 | train |
+| `qa-2004` | Losail International Circuit | 14 | 5.43 | train |
+| `ru-2014` | Sochi Autodrom | 14 | 5.85 | train |
+| `sa-2021` | Jeddah Corniche Circuit | 11 | 6.21 | train |
+| `sg-2008` | Marina Bay Street Circuit | 11 | 4.95 | train |
+| `tr-2005` | Intercity Istanbul Park | 14 | 5.32 | train |
+| `us-1909` | Indianapolis Motor Speedway | 14 | 4.09 | train |
+| `us-1956` | Watkins Glen International | 12 | 5.46 | train |
+| `us-2012` | Circuit of the Americas | 15 | 5.53 | train |
+| `us-2022` | Miami International Autodrome | 12 | 5.43 | train |
+| `us-2023` | Las Vegas Street Circuit | 12 | 6.24 | train |
+| `za-1961` | Kyalami Grand Prix Circuit | 12 | 4.53 | train |
 
-Circuit layouts are from [bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) by Tomislav Bacinger, used under the MIT licence ([`circuits/LICENSE.md`](circuits/LICENSE.md)). Track widths vary by circuit, from 8.5 m (Monaco) to 15 m, and are set in `config.TRACK_WIDTHS`.
+Circuit layouts are from [bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) by Tomislav Bacinger, used under the MIT licence ([`circuits/LICENSE.md`](circuits/LICENSE.md)). Lengths are measured along the preprocessed centerline. Widths are set per circuit in `config.TRACK_WIDTHS`.
 
-## Adding a New Circuit
+### Adding a circuit
+
 1. Add `circuits/<id>.geojson` containing a single `LineString` feature.
-2. Add `<id>` to `TRACK_IDS` in `config.py`, and optionally set its width in `TRACK_WIDTHS` (the default is 15 m).
-3. Run `python track_preprocessing.py <id>`, or any other script; `prepare_tracks()` generates `tracks/<id>.npy` the first time the track is used.
+2. Add `<id>` to `TRACK_IDS` in `config.py`, and optionally its width to `TRACK_WIDTHS` (the default is 15 m).
+3. Run `python track_preprocessing.py <id>`. Any other script also builds `tracks/<id>.npy` the first time the track is used.
+
+A new circuit joins the training set unless it is listed in `VAL_TRACKS` or `TEST_TRACKS`.
+
+## Limitations
+
+- The car is a 2D kinematic bicycle with no tyre slip, weight transfer, gears or elevation, and it is treated as a point when checking track limits.
+- Monaco is not finished by any model.
+- Training is unstable from one checkpoint to the next, and no model so far has both `v3`'s pace and `v2`'s reliability.
+- Trained weights are not published.
+
+Possible next steps are stabilising training, comparing the agent against a minimum-curvature racing line, and a dynamic tyre model.
 
 ## License
 
-MIT, see [`LICENSE`](LICENSE). The circuit data has its own MIT licence (see [Circuits](#circuits)).
-
-## Limitations & Future Work
-- The model is a 2D kinematic bicycle with no tyre slip, weight transfer, gears or elevation.
-- Tight, low-speed street circuits such as Monaco are still unsolved (see the DNFs above).
-- v15b trades about 5% of pace for its reliability on unseen tracks; closing that gap is the next goal.
-- There are no rumble strips or track limits beyond the fixed track width.
-- Possible next steps: a dynamic tyre model, curriculum learning ordered by corner difficulty, and comparison against an optimal racing line computed with a minimum-curvature solver.
+MIT, see [`LICENSE`](LICENSE). The circuit data has its own MIT licence, and the bundled Titillium Web font is under the SIL Open Font License ([`assets/fonts/OFL.txt`](assets/fonts/OFL.txt)).

@@ -50,7 +50,7 @@ def test_car_traction_circle_limits_lateral_acceleration():
 @pytest.mark.parametrize("obs_version,size", [(1, 65), (2, 65), (3, 68)])
 def test_reset_returns_observation_in_space(obs_version, size):
     env = make_env(obs_version=obs_version)
-    obs, info = env.reset(seed=0)
+    obs, _ = env.reset(seed=0)
     assert obs.shape == env.observation_space.shape == (size,)
     assert np.all(np.isfinite(obs))
 
@@ -60,7 +60,7 @@ def test_driving_straight_makes_progress():
     env.reset(seed=0)
     total = 0.0
     for _ in range(40):
-        obs, reward, terminated, truncated, info = env.step(np.array([0.0, 1.0], dtype=np.float32))
+        _, reward, terminated, _, _ = env.step(np.array([0.0, 1.0], dtype=np.float32))
         total += reward
         assert not terminated
     assert env._cumulative_arc > 10.0
@@ -71,7 +71,7 @@ def test_leaving_the_track_terminates_with_penalty():
     env = make_env()
     env.reset(seed=0)
     for _ in range(500):
-        obs, reward, terminated, truncated, info = env.step(np.array([1.0, 1.0], dtype=np.float32))
+        _, reward, terminated, _, info = env.step(np.array([1.0, 1.0], dtype=np.float32))
         if terminated:
             break
     assert info["termination_reason"] == "off_track"
@@ -124,7 +124,7 @@ def test_reset_seed_is_reproducible():
 
 
 # ---------------------------------------------------------------------------
-# v15: observation v3, domain randomization, random spawn, stall rule
+# v2: observation v3, domain randomization, random spawn, stall rule
 # ---------------------------------------------------------------------------
 
 LOOKAHEAD_START = 6  # v3: speed, lateral, heading, width, prev steer, prev throttle
@@ -136,7 +136,7 @@ def drive(env, obs, target_speed=15.0, max_steps=5000):
         angle = obs[LOOKAHEAD_START + 3 * 1 + 1] * np.pi
         steer = np.clip(angle / 0.4, -1.0, 1.0)
         throttle = np.clip((target_speed - env.car.v) / 5.0, -1.0, 1.0)
-        obs, reward, terminated, truncated, info = env.step(np.array([steer, throttle], dtype=np.float32))
+        obs, _, terminated, truncated, info = env.step(np.array([steer, throttle], dtype=np.float32))
         if terminated or truncated:
             return info
     raise AssertionError("episode did not end")
@@ -199,7 +199,7 @@ def test_parking_is_terminated_quickly_and_costs_more_than_a_crash():
     env = make_env()
     env.reset(seed=0)
     for step in range(1, 500):
-        obs, reward, terminated, truncated, info = env.step(np.array([0.0, -1.0], dtype=np.float32))
+        _, reward, terminated, _, info = env.step(np.array([0.0, -1.0], dtype=np.float32))
         if terminated:
             break
     assert info["termination_reason"] == "stalled"
@@ -219,3 +219,24 @@ def test_track_weights_and_explicit_track_option():
         assert env.track_name == "small"
     env.reset(seed=0, options={"track": "oval"})
     assert env.track_name == "oval"
+
+
+# ---------------------------------------------------------------------------
+# drive_lap
+# ---------------------------------------------------------------------------
+
+class FlatOutModel:
+    """Stands in for an SB3 model: full throttle, no steering."""
+
+    def predict(self, obs, deterministic=True):
+        return np.array([0.0, 1.0], dtype=np.float32), None
+
+
+def test_drive_lap_runs_one_episode_and_reports_every_action():
+    from racing_env import drive_lap
+    env = make_env()
+    actions = []
+    steps, info = drive_lap(FlatOutModel(), env, on_step=actions.append)
+    assert info["termination_reason"] == "off_track"  # straight on at the first corner
+    assert steps == env.steps == len(actions)
+    assert 0.0 < info["progress"] < 1.0

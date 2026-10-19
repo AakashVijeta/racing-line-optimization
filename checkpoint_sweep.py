@@ -4,13 +4,14 @@ Time-trial every Nth checkpoint of a training run and rank them.
 Tracks: the 40 real circuits plus the procedural validation set; add --proc-test
 to also report the held-out procedural test set.
 
-    python checkpoint_sweep.py --run sac_v14
-    python checkpoint_sweep.py --run sac_v14 --start 2000000 --every 250000 --workers 4
+    python checkpoint_sweep.py --run sac_v1
+    python checkpoint_sweep.py --run sac_v1 --start 2000000 --every 250000 --workers 4
 
 Ranking uses train, val and procedural-val tracks: laps completed first, then
-mean lap time on the tracks every candidate finished. Test tracks (Suzuka and
-the procedural test set) are reported but never used to rank, so they stay
-unbiased generalization results.
+mean lap time on the tracks every contender finished (contenders are the
+candidates within 10% of the most laps). Test tracks (Suzuka and the procedural
+test set) are reported but never used to rank, so they stay unbiased
+generalization results.
 """
 import argparse
 import csv
@@ -23,6 +24,8 @@ import numpy as np
 from config import TRACK_IDS, track_split
 
 CKPT_RE = re.compile(r"sac_racing_(\d+)_steps\.zip$")
+# Lap times are compared among candidates with at least this share of the best lap count
+CONTENDER_FRAC = 0.9
 
 
 def find_candidates(run_dir, start, every):
@@ -63,6 +66,7 @@ def evaluate(path, obs_version, include_proc_test):
     import torch
     torch.set_num_threads(1)
     from stable_baselines3 import SAC
+
     from agent_eval import run_time_trials
     from config import obs_version_for
 
@@ -70,6 +74,18 @@ def evaluate(path, obs_version, include_proc_test):
     pool, widths = build_eval_pool(include_proc_test)
     results = run_time_trials(model, pool, obs_version_for(path, model, obs_version), widths=widths)
     return {tid: r[0] for tid, r in results.items()}  # lap time or None
+
+
+def pace_tracks(laps, tracks):
+    """Tracks to compare lap times on: the ones every contender finished.
+
+    `laps` is {candidate: {track: lap time or None}}. Requiring every candidate
+    to finish would leave nothing to compare once a single checkpoint has collapsed.
+    """
+    done = {label: sum(times[t] is not None for t in tracks) for label, times in laps.items()}
+    cutoff = CONTENDER_FRAC * max(done.values())
+    contenders = [label for label, n in done.items() if n >= cutoff]
+    return [t for t in tracks if all(laps[label][t] is not None for label in contenders)]
 
 
 def group_of(track_id):
@@ -117,8 +133,8 @@ def main():
     ids_in = {g: [t for t in all_ids if group_of(t) == g] for g in report_groups}
     rank_tracks = [t for g in ranked_groups for t in ids_in[g]]
     test_tracks = ids_in["test"]
-    # Mean lap time is only comparable on tracks that every candidate finished
-    common = [t for t in rank_tracks if all(laps[c[0]][t] is not None for c in candidates)]
+    # Mean lap time is only comparable on a shared set of tracks
+    common = pace_tracks(laps, rank_tracks)
 
     rows = []
     for label, steps, path in candidates:
@@ -128,24 +144,27 @@ def main():
             "steps": steps if steps is not None else "",
             "path": path,
             **{f"{g}_done": sum(lt[t] is not None for t in ids_in[g]) for g in report_groups},
-            "mean_time_common": float(np.mean([lt[t] for t in common])) if common else float("nan"),
+            # None for a candidate that failed one of the shared tracks
+            "mean_time_common": (float(np.mean([lt[t] for t in common]))
+                                 if common and all(lt[t] is not None for t in common) else None),
             **{f"test_{t}": lt[t] for t in test_tracks},
             **{t: lt[t] for t in all_ids},
         })
-    # NaN when no track was finished by every candidate: rank on laps only
     rows.sort(key=lambda r: (-sum(r[f"{g}_done"] for g in ranked_groups),
-                             r["mean_time_common"] if r["mean_time_common"] == r["mean_time_common"] else float("inf")))
+                             r["mean_time_common"] if r["mean_time_common"] is not None else float("inf")))
 
-    fmt = lambda x: "DNF" if x is None else f"{x:.2f}"
+    def fmt(x, missing="DNF"):
+        return missing if x is None else f"{x:.2f}"
+
     groups_hdr = "  ".join(f"{g:>10}" for g in report_groups if g != "test")
     print(f"\nRanked on {' + '.join(ranked_groups)} laps, then mean lap time "
-          f"({len(common)} tracks finished by every model):")
+          f"({len(common)} tracks finished by every contender):")
     print(f"{'rank':>4}  {'model':<10} {groups_hdr} {'mean lap (s)':>13}  " +
           "  ".join(f"{t + ' (test)':>16}" for t in test_tracks))
     for i, r in enumerate(rows, 1):
         counts = "  ".join(f"{str(r[g + '_done']) + '/' + str(len(ids_in[g])):>10}"
                            for g in report_groups if g != "test")
-        print(f"{i:>4}  {r['model']:<10} {counts} {r['mean_time_common']:>13.2f}  " +
+        print(f"{i:>4}  {r['model']:<10} {counts} {fmt(r['mean_time_common'], '-'):>13}  " +
               "  ".join(f"{fmt(r['test_' + t]):>16}" for t in test_tracks))
 
     out = args.out or os.path.join(run_dir, "checkpoint_sweep.csv")

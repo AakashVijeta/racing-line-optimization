@@ -1,4 +1,6 @@
-import json, os
+import json
+import os
+
 import numpy as np
 
 # Bump whenever preprocessing output changes, so cached tracks/*.npy are rebuilt
@@ -219,6 +221,7 @@ def prepare_tracks(track_ids, circuits_dir="circuits", tracks_dir="tracks", stra
 
 if __name__ == "__main__":
     import argparse
+
     from config import TRACK_IDS
 
     parser = argparse.ArgumentParser(description="Preprocess circuits/*.geojson into tracks/*.npy")

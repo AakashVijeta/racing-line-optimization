@@ -1,6 +1,6 @@
 import numpy as np
 
-from track_generator import generate_pool, is_valid, radius_profile, MIN_RADIUS
+from track_generator import MIN_RADIUS, generate_pool, is_valid, radius_profile
 from track_preprocessing import resample_adaptive
 
 

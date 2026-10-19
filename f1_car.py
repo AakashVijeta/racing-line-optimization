@@ -175,7 +175,7 @@ class F1Car:
     # -------------------------------------------------------------------- draw
     @staticmethod
     def _fill_aa(surface, color, pts):
-        pts = [(int(round(x)), int(round(y))) for x, y in pts]
+        pts = [(round(x), round(y)) for x, y in pts]
         if gfxdraw is not None:
             gfxdraw.filled_polygon(surface, pts, color)
             gfxdraw.aapolygon(surface, pts, color)

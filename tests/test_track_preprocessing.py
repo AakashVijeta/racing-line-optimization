@@ -1,20 +1,20 @@
 import json
+
 import numpy as np
 import pytest
 
 from track_preprocessing import (
-    load_geojson_circuit,
-    project_to_local_xy,
-    deduplicate_points,
-    resample_even_spacing,
-    preprocess_circuit,
-    open_loop,
     catmull_rom_closed,
     circular_moving_average,
     compute_curvature,
+    deduplicate_points,
+    load_geojson_circuit,
+    open_loop,
+    preprocess_circuit,
+    project_to_local_xy,
     resample_adaptive,
+    resample_even_spacing,
 )
-
 
 # ---------------------------------------------------------------------------
 # load_geojson_circuit
@@ -262,6 +262,7 @@ def test_circular_moving_average_has_no_edge_falloff():
 
 def test_prepare_tracks_rebuilds_only_missing_or_stale(tmp_path):
     import shutil
+
     from track_preprocessing import PREPROCESS_VERSION, prepare_tracks
 
     circuits, tracks = tmp_path / "circuits", tmp_path / "tracks"

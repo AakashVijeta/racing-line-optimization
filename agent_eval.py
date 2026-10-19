@@ -1,11 +1,14 @@
 import argparse
 import csv
 import os
-from tqdm import tqdm
+
 from stable_baselines3 import SAC
-from racing_env import RacingEnv
-from track_preprocessing import build_track_pool, prepare_tracks
+from tqdm import tqdm
+
 from config import DEFAULT_MODEL_VERSION, TRACK_IDS, TRACK_WIDTHS, model_path_for, obs_version_for, track_split
+from racing_env import RacingEnv, drive_lap
+from track_preprocessing import build_track_pool, prepare_tracks
+
 
 def format_time(seconds):
     """Converts raw seconds into M:SS.ms format (e.g., 1:44.700)"""
@@ -29,25 +32,15 @@ def run_lap(model, track_id, track_data, obs_version, widths=None):
     """Drive one deterministic lap. Returns (lap_time or None, avg_speed_kph, status)."""
     env = RacingEnv(track_pool={track_id: track_data}, track_widths=widths or TRACK_WIDTHS,
                     render_mode=None, obs_version=obs_version)
-    obs, info = env.reset()
-    done = False
-    steps = 0
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
-        steps += 1
-
-    reason = info.get("termination_reason", "unknown")
-    arc_frac = env._cumulative_arc / env.track_length
+    steps, info = drive_lap(model, env)
     env.close()
 
+    reason = info["termination_reason"]
     if reason == "lap_completed":
         lap_time = steps * env.dt
         return lap_time, (env.track_length / lap_time) * 3.6, "Finished"
-    if reason == "timeout" or truncated:
-        return None, 0.0, f"Timeout at {steps} steps (Arc: {arc_frac:.2f})"
-    return None, 0.0, f"{reason} at {steps} steps (Arc: {arc_frac:.2f})"
+    label = "Timeout" if reason == "timeout" else reason
+    return None, 0.0, f"{label} at {steps} steps (Arc: {info['progress']:.2f})"
 
 
 def run_time_trials(model, track_pool, obs_version, widths=None, progress=False):

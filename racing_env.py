@@ -1,10 +1,12 @@
 import gymnasium as gym
 import numpy as np
 import pygame
-from car import Car
 from gymnasium import spaces
-from plot_track import compute_boundaries, close_loop
+
+from car import Car
+from plot_track import close_loop, compute_boundaries
 from track_preprocessing import compute_curvature
+
 
 class RacingEnv(gym.Env):
     SPAWN_GRIP = 44.1  # m/s^2, mechanical grip only (no downforce): conservative spawn speeds
@@ -29,10 +31,10 @@ class RacingEnv(gym.Env):
     ):
         """
         obs_version: which observation the policy expects.
-            1: models v10-v13 (boundary distance to the nearest boundary *vertex*,
+            1: models from before v1 (boundary distance to the nearest boundary *vertex*,
                lookahead snapped to the next centerline vertex)
-            2: model v14 (segment-accurate boundaries, interpolated lookahead)
-            3: v15+ (adds track width, previous action, signed curvature)
+            2: model v1 (segment-accurate boundaries, interpolated lookahead)
+            3: v2+ (adds track width, previous action, signed curvature)
         randomize: training-time domain randomization. Each reset scales the
             track width, may mirror and/or reverse the track, and (with
             random_spawn) starts at a random point and speed. Keep False for
@@ -80,7 +82,7 @@ class RacingEnv(gym.Env):
         # agent can buy: braking from ~90 m/s at 40 m/s^2 (~2.3 s) plus the
         # stall window. With a 0.25 s window: -75 * 0.995^50 = -58 < -45.
         # (A 2 s window with -60 discounted to about -45, a tie with crashing,
-        # and v15b learned to brake to a stop before hard corners.)
+        # and models learned to brake to a stop before hard corners.)
         # No corner needs < 2 m/s: the tightest allowed (9 m radius) takes ~20 m/s.
         self.stall_speed = 2.0
         self.stall_steps = int(0.25 / dt)
@@ -446,7 +448,6 @@ class RacingEnv(gym.Env):
         steering_physical = self.steering_min + ((steering + 1) / 2) * (
             self.steering_max - self.steering_min
         )
-        before_v = self.car.v
         self.car.step(steering_physical, throttle_physical, self.dt)
         self.trail.append((self.car.x, self.car.y))
         self.steps += 1
@@ -603,3 +604,21 @@ class RacingEnv(gym.Env):
         if self.screen is not None:
             pygame.display.quit()
             self.screen = None
+
+
+def drive_lap(model, env, on_step=None):
+    """Drive one deterministic episode from a fresh reset. Returns (steps, info of the last step).
+
+    `on_step(action)`, if given, is called before each action is applied.
+    """
+    obs, info = env.reset()
+    done = False
+    steps = 0
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        if on_step is not None:
+            on_step(action)
+        obs, _, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        steps += 1
+    return steps, info

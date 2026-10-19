@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class Car:
     def __init__(self, x, y, theta, wheelbase=3.5, max_lateral_accel=44.1):
         """
@@ -70,6 +71,3 @@ class Car:
         # --- 7. POSITION UPDATE ---
         self.x += self.v * np.cos(self.theta) * dt
         self.y += self.v * np.sin(self.theta) * dt
-
-    def get_state(self):
-        return (self.x, self.y, self.theta, self.v)

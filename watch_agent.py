@@ -5,10 +5,13 @@ Watch the agent drive one track, with live telemetry in the terminal.
     python watch_agent.py --track mc-1929    # Monaco
 """
 import argparse
+
 from stable_baselines3 import SAC
+
+from config import TRACK_IDS, TRACK_WIDTHS, model_path_for, obs_version_for
 from racing_env import RacingEnv
 from track_preprocessing import build_track_pool, prepare_tracks
-from config import TRACK_IDS, TRACK_WIDTHS, model_path_for, obs_version_for
+
 
 def main():
     parser = argparse.ArgumentParser(description="Watch the agent on a single track")
@@ -43,7 +46,7 @@ def main():
     try:
         while not env.quit_requested:
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
+            obs, _, terminated, truncated, info = env.step(action)
             steps += 1
 
             # Render to the screen (the environment handles the 30 FPS clock internally)

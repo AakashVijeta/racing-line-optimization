@@ -1,14 +1,19 @@
 """
-Broadcast-style renderer for a recorded lap (see record_lap.py).
+Renderer for a recorded lap (see record_lap.py).
 
 Layout, in a 1920x1080 design space that scales to any output size:
 
-    +------------------------------+----------------+
-    | chase cam: track, kerbs,     | circuit name   |
-    | speed-coloured racing line,  | track map      |
-    | car; lap timer, speed gauge, | speed trace    |
-    | throttle/brake, G-G diagram  | throttle/brake |
-    +------------------------------+----------------+
+    +-------------+------------------------+----------------+
+    | lap time    |                        | circuit name   |
+    | and sectors | chase cam: grey track  |                |
+    |             | with white edge blocks,|   track map    |
+    | speed, on   | the racing line        |                |
+    | its scale   | coloured by speed,     |   speed trace  |
+    | pedals      | the car                | credit         |
+    +-------------+------------------------+----------------+
+
+Black throughout, and nothing is drawn over the road. One colour scale (red
+when slow to green flat out) carries speed everywhere it appears.
 
 Every frame is drawn `supersample` times larger and shrunk with smoothscale,
 which anti-aliases all the polygons and lines pygame draws without it.
@@ -26,28 +31,33 @@ from f1_car import F1Car
 
 FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
 DESIGN_W, DESIGN_H = 1920, 1080
-CHASE_W = 1240  # design-space width of the chase-cam panel; the rest is the data panel
+LEFT_W, RIGHT_W = 360, 700  # design-space widths of the instrument and data columns; the chase cam takes the rest
+PAD = 32                    # inner margin of the instrument column
 
 # ---- palette -----------------------------------------------------------------
-GRASS = (22, 36, 27)
-RUNOFF = (54, 55, 58)
-ASPHALT = (38, 40, 46)
-EDGE_LINE = (226, 228, 232)
-KERB_RED = (206, 38, 46)
-KERB_WHITE = (232, 232, 232)
-PANEL_BG = (12, 14, 19)
-PANEL_LINE = (38, 42, 52)
-TEXT = (236, 238, 242)
-TEXT_DIM = (132, 138, 152)
-ACCENT = (255, 62, 84)
+GROUND = (6, 6, 8)        # around the track: the same black as the two columns
+ASPHALT = (44, 45, 49)
+KERB = (236, 236, 236)    # white blocks along both edges, the whole way round
+KERB_DEPTH = 2.6          # m, how far the blocks reach out from the track
+KERB_BLOCK = 1.2          # m, length of one block (and of the gap after it)
+LINE_AHEAD = (120, 122, 130)
+PANEL_BG = (6, 6, 8)
+PANEL_LINE = (36, 36, 40)
+MAP_TRACK = (52, 53, 58)
+TEXT = (240, 240, 240)
+TEXT_DIM = (140, 140, 146)
 THROTTLE_GREEN = (64, 220, 128)
 BRAKE_RED = (255, 72, 72)
 
-# Speed colour scale (km/h -> RGB): slow corners are blue/violet, flat out is yellow
-SPEED_STOPS = [(60, (80, 130, 255)), (140, (150, 95, 255)), (210, (240, 80, 170)),
-               (270, (255, 140, 50)), (320, (255, 230, 70))]
+# Speed colour scale (km/h -> RGB): red when slow, through orange and yellow, to green
+# flat out. Lightness rises at every stop too, so the order reads even for viewers
+# who can't tell red from green.
+SPEED_STOPS = [(60, (200, 30, 30)), (140, (235, 110, 30)), (210, (240, 180, 40)),
+               (270, (170, 225, 60)), (320, (80, 240, 120))]
 
-SPLIT_LABELS = {"test": "NEVER SEEN IN TRAINING", "val": "VALIDATION TRACK", "train": "TRAINING TRACK"}
+SPLIT_NOTES = {"test": "A circuit the agent never saw in training.",
+               "val": "A validation circuit, not used for training.",
+               "train": "One of the agent's training circuits."}
 
 
 def speed_color(kph):
@@ -61,6 +71,11 @@ def speed_color(kph):
 def format_laptime(seconds):
     minutes, secs = divmod(max(seconds, 0.0), 60)
     return f"{int(minutes)}:{secs:06.3f}"
+
+
+def format_sector(seconds):
+    """Sector time: plain seconds under a minute, lap-time format above."""
+    return f"{seconds:.3f}" if seconds < 60 else format_laptime(seconds)
 
 
 def gaussian_smooth(values, sigma, wrap=False):
@@ -79,7 +94,9 @@ class LapData:
 
     def __init__(self, path):
         d = np.load(path)
-        get = lambda key, default=None: d[key] if key in d.files else default
+
+        def get(key, default=None):
+            return d[key] if key in d.files else default
 
         self.x, self.y, self.v = d["x"], d["y"], d["v"]
         self.theta = np.unwrap(d["theta"])
@@ -114,6 +131,11 @@ class LapData:
         self.g_lat = gaussian_smooth(self.v * yaw_rate, 1.5) / 9.81
         self.g_long = gaussian_smooth(np.gradient(self.v, self.dt), 1.5) / 9.81
         self.color = speed_color(self.kph)
+        # Three sectors of equal distance: the time each one ends
+        times = np.arange(self.n) * self.dt
+        arc = np.maximum.accumulate(self.arc)
+        self.sector_ends = [float(np.interp(self.track_length * k / 3, arc, times)) for k in (1, 2)]
+        self.sector_ends.append(self.lap_time)
 
     def index(self, t):
         """(i0, alpha): the sample before time t and the fraction of the way to the next."""
@@ -151,13 +173,17 @@ class Fonts:
         from PIL import ImageFont
         key = (weight, size)
         if key not in self._fonts:
-            px = max(6, int(round(size * self.scale)))
+            px = max(6, round(size * self.scale))
             path = os.path.join(FONT_DIR, self.FILES[weight])
             try:
                 self._fonts[key] = ImageFont.truetype(path, px)
             except OSError:
                 self._fonts[key] = ImageFont.load_default(px)
         return self._fonts[key]
+
+    def advance(self, msg, weight, size):
+        """Width of msg in canvas pixels, as the font would set it."""
+        return self._font(weight, size).getlength(msg)
 
     def render(self, msg, weight, size, color):
         key = (msg, weight, size, tuple(color))
@@ -166,7 +192,7 @@ class Fonts:
             from PIL import Image, ImageDraw
             font = self._font(weight, size)
             ascent, descent = font.getmetrics()
-            width = max(1, int(math.ceil(font.getlength(msg))))
+            width = max(1, math.ceil(font.getlength(msg)))
             canvas = Image.new("RGBA", (width + 2, ascent + descent), (0, 0, 0, 0))
             ImageDraw.Draw(canvas).text((1, 0), msg, font=font, fill=(*color[:3], 255))
             img = pygame.image.frombytes(canvas.tobytes(), canvas.size, "RGBA")
@@ -187,14 +213,14 @@ class LapRenderer:
         self.canvas = pygame.Surface((width * supersample, height * supersample))
         self.W, self.H = self.canvas.get_size()
         self.fonts = Fonts(self.s)
-        self.chase_w = round(self.W * CHASE_W / DESIGN_W)
+        left = round(self.W * LEFT_W / DESIGN_W)
+        self.chase = pygame.Rect(left, 0, self.W - left - round(self.W * RIGHT_W / DESIGN_W), self.H)
 
         self._prepare_track()
         self._prepare_camera()
         self.car = F1Car(ppm=8.0 * self.s, visual_scale=2.0, supersample=3)
-        self._vignette = self._make_vignette()
         self._map = self._prepare_map()
-        self._traces = self._prepare_traces()
+        self._trace = self._prepare_trace()
 
     # ------------------------------------------------------------- helpers
     def u(self, v):
@@ -207,12 +233,19 @@ class LapRenderer:
         surf.blit(img, rect)
         return rect
 
-    def panel(self, surf, rect, color=(8, 10, 14, 190), radius=14):
-        r = pygame.Rect([round(c) for c in rect])
-        box = pygame.Surface(r.size, pygame.SRCALPHA)
-        pygame.draw.rect(box, color, box.get_rect(), border_radius=round(self.u(radius)))
-        surf.blit(box, r.topleft)
-        return r
+    def number(self, surf, msg, pos, weight="bold", size=24, color=TEXT, anchor="topleft"):
+        """Text with every digit in a cell of the same width, so a changing readout stays still."""
+        cell = max(self.fonts.advance(d, weight, size) for d in "0123456789")
+        widths = [cell if ch.isdigit() else self.fonts.advance(ch, weight, size) for ch in msg]
+        height = self.fonts.render("0", weight, size, color).get_height()
+        box = pygame.Rect(0, 0, round(sum(widths)), height)
+        setattr(box, anchor, (round(pos[0]), round(pos[1])))
+        x = box.x
+        for ch, w in zip(msg, widths):
+            img = self.fonts.render(ch, weight, size, color)
+            surf.blit(img, (round(x + (w - img.get_width()) / 2), box.y))
+            x += w
+        return box
 
     # ------------------------------------------------------- track geometry
     def _prepare_track(self):
@@ -224,18 +257,20 @@ class LapRenderer:
         normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])  # points left
         half = self.lap.track_width / 2
         self.edge_l, self.edge_r = c + normal * half, c - normal * half
-        self.run_l, self.run_r = c + normal * (half + 9.0), c - normal * (half + 9.0)
-        self.kerb_l, self.kerb_r = c + normal * (half + 1.4), c - normal * (half + 1.4)
-
-        # Kerbs where the corner radius is under ~70 m, extended a little either side
-        seg = np.linalg.norm(nxt - c, axis=1)
-        arc = np.concatenate([[0.0], np.cumsum(seg)[:-1]])
-        curv = gaussian_smooth(np.abs(self.lap.curvature), 3, wrap=True)
-        corner = curv > 1 / 70
-        grow = np.convolve(np.pad(corner.astype(float), 6, mode="wrap"), np.ones(13), mode="valid") > 0
-        self.kerb_on = grow
-        self.kerb_color = np.where((arc // 3.5).astype(int) % 2 == 0, 0, 1)
         self.n_pts = len(c)
+
+        # White blocks along both edges. The centerline is up to 5 m between points,
+        # so the blocks are cut from a resampling at block length.
+        loop = np.vstack([c, c[:1]])
+        arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(loop, axis=0), axis=1))])
+        s = np.arange(0.0, arc[-1], KERB_BLOCK)
+        pts = np.column_stack([np.interp(s, arc, loop[:, 0]), np.interp(s, arc, loop[:, 1])])
+        n = np.column_stack([np.interp(s, arc, np.r_[normal[:, 0], normal[0, 0]]),
+                             np.interp(s, arc, np.r_[normal[:, 1], normal[0, 1]])])
+        n /= np.linalg.norm(n, axis=1, keepdims=True)
+        self.block_mid = pts
+        self.block_in_l, self.block_out_l = pts + n * half, pts + n * (half + KERB_DEPTH)
+        self.block_in_r, self.block_out_r = pts - n * half, pts - n * (half + KERB_DEPTH)
         self.start_pt, self.start_normal, self.start_tangent = c[0], normal[0], tangent[0]
 
     def _prepare_camera(self):
@@ -260,37 +295,32 @@ class LapRenderer:
         heading = lap.lerp(self.cam_heading, t)
         ppm = lap.lerp(self.cam_ppm, t) * self.s
         cam = np.array([st["x"], st["y"]])
-        origin = (self.chase_w / 2, self.H * 0.64)
+        origin = (self.chase.centerx, self.H * 0.64)
 
-        clip = pygame.Rect(0, 0, self.chase_w, self.H)
-        surf.set_clip(clip)
-        surf.fill(GRASS, clip)
+        surf.set_clip(self.chase)
+        surf.fill(GROUND, self.chase)
 
         # Segments near the camera (both ends checked so long straights aren't culled)
-        radius_m = math.hypot(self.chase_w, self.H) / ppm * 0.75 + 20
+        radius_m = math.hypot(self.chase.w, self.H) / ppm * 0.75 + 20
         near = np.linalg.norm(lap.centerline - cam, axis=1) < radius_m
         seg_on = near | np.roll(near, -1)
         idx = np.nonzero(seg_on)[0]
         j = (idx + 1) % self.n_pts
 
-        xf = lambda p: self._xf(p, cam, heading, ppm, origin)
-        run_l, run_r = xf(self.run_l), xf(self.run_r)
-        kerb_l, kerb_r = xf(self.kerb_l), xf(self.kerb_r)
-        edge_l, edge_r = xf(self.edge_l), xf(self.edge_r)
+        def xf(p):
+            return self._xf(p, cam, heading, ppm, origin)
 
-        for i, k in zip(idx, j):
-            pygame.draw.polygon(surf, RUNOFF, (run_l[i], run_l[k], run_r[k], run_r[i]))
-        for i, k in zip(idx, j):
-            if self.kerb_on[i]:
-                col = KERB_RED if self.kerb_color[i] == 0 else KERB_WHITE
-                pygame.draw.polygon(surf, col, (edge_l[i], edge_l[k], kerb_l[k], kerb_l[i]))
-                pygame.draw.polygon(surf, col, (edge_r[i], edge_r[k], kerb_r[k], kerb_r[i]))
+        # Every other resampled slice is a block; the ones between are the gaps
+        near_b = np.nonzero(np.linalg.norm(self.block_mid - cam, axis=1) < radius_m)[0]
+        nb = len(self.block_mid)
+        for inner, outer in ((self.block_in_l, self.block_out_l), (self.block_in_r, self.block_out_r)):
+            inner, outer = xf(inner), xf(outer)
+            for i in near_b[near_b % 2 == 0]:
+                k = (i + 1) % nb
+                pygame.draw.polygon(surf, KERB, (inner[i], inner[k], outer[k], outer[i]))
+        edge_l, edge_r = xf(self.edge_l), xf(self.edge_r)
         for i, k in zip(idx, j):
             pygame.draw.polygon(surf, ASPHALT, (edge_l[i], edge_l[k], edge_r[k], edge_r[i]))
-        line_w = max(1, round(0.3 * ppm))
-        for i, k in zip(idx, j):
-            pygame.draw.line(surf, EDGE_LINE, edge_l[i], edge_l[k], line_w)
-            pygame.draw.line(surf, EDGE_LINE, edge_r[i], edge_r[k], line_w)
 
         self._draw_start_line(surf, xf)
         self._draw_racing_line(surf, t, xf, ppm, cam, radius_m)
@@ -301,7 +331,6 @@ class LapRenderer:
         self.car.draw(surf, car_pos, car_theta, st["steering"], braking=braking,
                       shadow_offset=(self.u(5), self.u(7)))
 
-        surf.blit(self._vignette, (0, 0))
         surf.set_clip(None)
 
     def _draw_start_line(self, surf, xf):
@@ -325,13 +354,10 @@ class LapRenderer:
         pos = np.column_stack([lap.x, lap.y])
         head = pos[i0] + a * (pos[i0 + 1] - pos[i0])
 
-        # Line still to come: faint dots, so the viewer sees the agent's chosen line
-        ahead = pos[i0 + 1: i0 + 1 + int(6.0 / lap.dt)]
-        if len(ahead):
-            pts = xf(ahead)
-            r = max(1, round(0.28 * ppm))
-            for p in pts[::2]:
-                pygame.draw.circle(surf, (150, 154, 168), p, r)
+        # Line still to come: a thin grey line, so the viewer sees the agent's chosen line
+        ahead = np.vstack([head, pos[i0 + 1: i0 + 1 + int(6.0 / lap.dt)]])
+        if len(ahead) >= 2:
+            pygame.draw.lines(surf, LINE_AHEAD, False, xf(ahead), max(1, round(self.u(2))))
 
         # Line driven so far: thick, coloured by speed
         start = max(0, i0 - int(25.0 / lap.dt))
@@ -345,155 +371,90 @@ class LapRenderer:
                 pygame.draw.line(surf, colors[q + 1], pts[q], pts[q + 1], w)
                 pygame.draw.circle(surf, colors[q + 1], pts[q + 1], w / 2)
 
-    def _make_vignette(self):
-        """Darkened edges and corners for the chase panel (a radial alpha gradient)."""
-        w, h = self.chase_w, self.H
-        small = pygame.Surface((64, 36), pygame.SRCALPHA)
-        for y in range(36):
-            for x in range(64):
-                d = math.hypot((x - 31.5) / 32, (y - 20) / 22)
-                small.set_at((x, y), (0, 0, 0, int(np.clip((d - 0.55) * 210, 0, 170))))
-        return pygame.transform.smoothscale(small, (w, h))
-
-    # ------------------------------------------------------------ chase HUD
-    def draw_hud(self, surf, t):
+    # ---------------------------------------------------- instrument column
+    def draw_instruments(self, surf, t):
+        """Left column: lap time and sectors at the top, speed in the middle, pedals at the bottom."""
+        col = pygame.Rect(0, 0, self.chase.x, self.H)
+        surf.fill(PANEL_BG, col)
+        pygame.draw.line(surf, PANEL_LINE, col.topright, col.bottomright, max(1, round(self.u(2))))
         st = self.lap.state(t)
-        u = self.u
+        self._draw_lap_timer(surf, t, st)
+        self._draw_speed(surf, st)
+        self._draw_pedals(surf, st)
 
-        # Lap timer and progress
-        box = self.panel(surf, (u(28), u(28), u(330), u(118)))
-        self.text(surf, "LAP TIME", (box.x + u(22), box.y + u(14)), "semibold", 18, TEXT_DIM)
-        shown = min(t, self.lap.lap_time)
-        self.text(surf, format_laptime(shown), (box.x + u(20), box.y + u(30)), "bold", 50)
-        bar = pygame.Rect(box.x + u(22), box.bottom - u(18), box.w - u(44), max(2, u(5)))
-        pygame.draw.rect(surf, PANEL_LINE, bar, border_radius=bar.h)
+    def _draw_lap_timer(self, surf, t, st):
+        u, lap = self.u, self.lap
+        x, w = u(PAD), self.chase.x - 2 * u(PAD)
+        shown = min(t, lap.lap_time)
+        self.text(surf, "Lap complete" if t >= lap.duration else "Lap time", (x, u(34)), "regular", 22, TEXT_DIM)
+        self.number(surf, format_laptime(shown), (x - u(3), u(60)), "bold", 72)
+
+        # Lap progress, split into the three sectors
+        bar = pygame.Rect(round(x), round(u(160)), round(w), max(2, round(u(5))))
+        pygame.draw.rect(surf, PANEL_LINE, bar)
         filled = bar.copy()
         filled.w = max(1, round(bar.w * st["progress"]))
-        pygame.draw.rect(surf, ACCENT, filled, border_radius=bar.h)
+        pygame.draw.rect(surf, TEXT, filled)
+        gap = max(2, round(u(4)))
+        for k in (1, 2):
+            pygame.draw.rect(surf, PANEL_BG, (bar.x + bar.w * k / 3 - gap / 2, bar.y, gap, bar.h))
 
-        self._draw_speed_gauge(surf, st)
-        self._draw_gg(surf, t)
-        self._draw_speed_legend(surf)
-        self._draw_title_card(surf, t)
-        if t >= self.lap.duration:
-            self._draw_finish_banner(surf)
+        start = 0.0
+        for k, end in enumerate(lap.sector_ends):
+            cx = x + w * k / 3
+            self.text(surf, f"Sector {k + 1}", (cx, u(180)), "regular", 18, TEXT_DIM)
+            if shown >= end:
+                self.number(surf, format_sector(end - start), (cx, u(204)), "semibold", 25)
+            elif shown >= start:
+                self.number(surf, format_sector(shown - start), (cx, u(204)), "semibold", 25, TEXT_DIM)
+            start = end
 
-    def _draw_speed_gauge(self, surf, st):
+    def _draw_speed(self, surf, st):
+        """Speed as one large figure, over the colour scale that the racing line uses."""
         u = self.u
-        cx, cy, r = u(170), self.H - u(150), u(118)
-        self.panel(surf, (cx - u(150), cy - u(142), u(410), u(270)), radius=18)
-        # 250-degree dial, 0 km/h at bottom-left, filling clockwise
-        start, span = math.radians(215), math.radians(250)
-        frac = float(np.clip(st["kph"] / 350, 0, 1))
-        width = u(14)
+        x, w = u(PAD), self.chase.x - 2 * u(PAD)
+        r = self.number(surf, f"{st['kph']:.0f}", (x - u(3), u(292)), "bold", 96)
+        self.text(surf, "km/h", (r.right + u(12), r.bottom - u(26)), "regular", 24, TEXT_DIM, anchor="bottomleft")
 
-        def ring(a0, a1, color):
-            angles = np.linspace(a0, a1, max(2, int(abs(a1 - a0) / 0.03) + 2))
-            outer = [(cx + r * math.cos(a), cy - r * math.sin(a)) for a in angles]
-            inner = [(cx + (r - width) * math.cos(a), cy - (r - width) * math.sin(a)) for a in angles[::-1]]
-            pygame.draw.polygon(surf, color, outer + inner)
-
-        ring(start, start - span, PANEL_LINE)
-        steps = max(1, int(50 * frac))
-        for q in range(steps):
-            a0 = start - span * frac * q / steps
-            a1 = start - span * frac * (q + 1) / steps - 0.005
-            ring(a0, a1, tuple(speed_color(350 * frac * (q + 0.5) / steps)))
-        self.text(surf, f"{st['kph']:.0f}", (cx, cy + u(4)), "bold", 78, anchor="center")
-        self.text(surf, "KM/H", (cx, cy + u(52)), "semibold", 20, TEXT_DIM, anchor="center")
-
-        # Throttle and brake bars
-        for q, (label, value, color) in enumerate([("THR", max(st["throttle"], 0.0), THROTTLE_GREEN),
-                                                   ("BRK", max(-st["throttle"], 0.0), BRAKE_RED)]):
-            x = cx + u(162) + q * u(46)
-            bar = pygame.Rect(round(x), round(cy - u(100)), round(u(24)), round(u(190)))
-            pygame.draw.rect(surf, PANEL_LINE, bar, border_radius=round(u(5)))
-            fill = bar.copy()
-            fill.h = round(bar.h * min(value, 1.0))
-            fill.bottom = bar.bottom
-            if fill.h > 0:
-                pygame.draw.rect(surf, color, fill, border_radius=round(u(5)))
-            self.text(surf, label, (bar.centerx, bar.bottom + u(16)), "semibold", 16, TEXT_DIM, anchor="center")
-
-    def _draw_gg(self, surf, t):
-        """G-G diagram: lateral vs longitudinal g, with the last second as a fading trail."""
-        lap, u = self.lap, self.u
-        r = u(92)
-        cx, cy = self.chase_w - u(140), self.H - u(150)
-        self.panel(surf, (cx - u(118), cy - u(132), u(236), u(262)), radius=18)
-        for g in (2, 4, 6):
-            pygame.draw.circle(surf, PANEL_LINE, (cx, cy), r * g / 6.5, max(1, round(u(1.5))))
-        pygame.draw.line(surf, PANEL_LINE, (cx - r, cy), (cx + r, cy), max(1, round(u(1))))
-        pygame.draw.line(surf, PANEL_LINE, (cx, cy - r), (cx, cy + r), max(1, round(u(1))))
-
-        def pt(g_lat, g_long):
-            # Right turn pushes the driver left, so plot lateral g as felt (negated yaw direction)
-            return cx - r * g_lat / 6.5, cy - r * g_long / 6.5
-
-        i0, _ = lap.index(t)
-        span = int(1.0 / lap.dt)
-        for q in range(max(0, i0 - span), i0 + 1):
-            fade = 1 - (i0 - q) / span
-            col = tuple(int(c * (0.25 + 0.6 * fade)) for c in ACCENT)
-            pygame.draw.circle(surf, col, pt(lap.g_lat[q], lap.g_long[q]), u(3.5))
-        g_lat, g_long = lap.lerp(lap.g_lat, t), lap.lerp(lap.g_long, t)
-        pygame.draw.circle(surf, (255, 255, 255), pt(g_lat, g_long), u(7))
-        total = math.hypot(g_lat, g_long)
-        self.text(surf, "G-FORCE", (cx - u(100), cy - u(122)), "semibold", 16, TEXT_DIM)
-        self.text(surf, f"{total:.1f} G", (cx + u(100), cy - u(126)), "bold", 22, anchor="topright")
-
-    def _draw_speed_legend(self, surf):
-        u = self.u
-        x, y, w, h = self.chase_w - u(300), u(40), u(250), u(10)
-        self.panel(surf, (x - u(18), y - u(14), w + u(36), u(70)), radius=12)
+        lo, hi = SPEED_STOPS[0][0], SPEED_STOPS[-1][0]
+        y, h = u(446), u(10)
         for q in range(round(w)):
-            kph = SPEED_STOPS[0][0] + (SPEED_STOPS[-1][0] - SPEED_STOPS[0][0]) * q / w
-            pygame.draw.line(surf, tuple(speed_color(kph)), (x + q, y), (x + q, y + h))
-        self.text(surf, f"{SPEED_STOPS[0][0]}", (x, y + h + u(4)), "semibold", 16, TEXT_DIM)
-        self.text(surf, "SPEED  KM/H", (x + w / 2, y + h + u(4)), "semibold", 16, TEXT_DIM, anchor="midtop")
-        self.text(surf, f"{SPEED_STOPS[-1][0]}+", (x + w, y + h + u(4)), "semibold", 16, TEXT_DIM, anchor="topright")
+            pygame.draw.line(surf, tuple(speed_color(lo + (hi - lo) * q / w)), (x + q, y), (x + q, y + h))
+        # Marker: where the current speed sits on the scale
+        mx = x + w * float(np.clip((st["kph"] - lo) / (hi - lo), 0, 1))
+        mw = max(2, round(u(4)))
+        pygame.draw.rect(surf, PANEL_BG, (mx - mw / 2 - u(2), y - u(8), mw + u(4), h + u(16)))
+        pygame.draw.rect(surf, TEXT, (mx - mw / 2, y - u(6), mw, h + u(12)))
+        self.text(surf, str(lo), (x, y + h + u(10)), "regular", 18, TEXT_DIM)
+        self.text(surf, f"{hi}+", (x + w, y + h + u(10)), "regular", 18, TEXT_DIM, anchor="topright")
 
-    def _draw_title_card(self, surf, t):
-        """Circuit name over the chase cam for the first seconds, then fades out."""
-        alpha = float(np.clip((3.2 - t) / 0.8, 0, 1))
-        if alpha <= 0:
-            return
+    def _draw_pedals(self, surf, st):
+        """One bar from a centre mark: braking grows to the left, throttle to the right."""
         u = self.u
-        layer = pygame.Surface((self.chase_w, self.H), pygame.SRCALPHA)
-        name = self.lap.track_name.upper()
-        cx = self.chase_w / 2
-        name_w = self.fonts.render(name, "bold", 42, TEXT).get_width()
-        box = pygame.Rect(0, 0, max(u(760), name_w + u(90)), u(150))
-        box.center = (round(cx), round(self.H * 0.3))
-        pygame.draw.rect(layer, (8, 10, 14, 215), box, border_radius=round(u(16)))
-        pygame.draw.rect(layer, ACCENT, (box.x, box.y, round(u(8)), box.h),
-                         border_top_left_radius=round(u(16)), border_bottom_left_radius=round(u(16)))
-        self.text(layer, name, (cx, box.y + u(48)), "bold", 42, anchor="center")
-        tag = SPLIT_LABELS.get(self.lap.track_split, "")
-        sub = f"{tag}  ·  AI DRIVER: SOFT ACTOR-CRITIC" if tag else "AI DRIVER: SOFT ACTOR-CRITIC"
-        self.text(layer, sub, (cx, box.y + u(104)), "semibold", 22, ACCENT if tag else TEXT_DIM, anchor="center")
-        layer.set_alpha(round(255 * alpha))
-        surf.blit(layer, (0, 0))
+        x, w = u(PAD), self.chase.x - 2 * u(PAD)
+        y, h = u(892) - u(14), u(14)
+        cx = x + w / 2
+        self.text(surf, "Brake", (x, y - u(36)), "regular", 22, TEXT_DIM)
+        self.text(surf, "Throttle", (x + w, y - u(36)), "regular", 22, TEXT_DIM, anchor="topright")
+        pygame.draw.line(surf, PANEL_LINE, (x, y + h / 2), (x + w, y + h / 2), max(1, round(u(2))))
+        throttle = float(np.clip(st["throttle"], -1, 1))
+        if throttle > 0:
+            pygame.draw.rect(surf, THROTTLE_GREEN, (cx, y, w / 2 * throttle, h))
+        elif throttle < 0:
+            pygame.draw.rect(surf, BRAKE_RED, (cx + w / 2 * throttle, y, -w / 2 * throttle, h))
+        pygame.draw.rect(surf, TEXT, (cx - u(1.5), y - u(6), u(3), h + u(12)))
 
-    def _draw_finish_banner(self, surf):
-        u = self.u
-        box = pygame.Rect(0, 0, u(620), u(150))
-        box.center = (round(self.chase_w / 2), round(self.H * 0.3))
-        self.panel(surf, box, (8, 10, 14, 225), radius=16)
-        pygame.draw.rect(surf, THROTTLE_GREEN, (box.x, box.y, round(u(8)), box.h),
-                         border_top_left_radius=round(u(16)), border_bottom_left_radius=round(u(16)))
-        self.text(surf, "LAP COMPLETE", (box.centerx, box.y + u(40)), "semibold", 26, THROTTLE_GREEN, anchor="center")
-        self.text(surf, format_laptime(self.lap.lap_time), (box.centerx, box.y + u(96)), "bold", 64, anchor="center")
-
-    # ----------------------------------------------------------- data panel
-    def _panel_rect(self):
-        return pygame.Rect(self.chase_w, 0, self.W - self.chase_w, self.H)
+    # ------------------------------------------------------------ map column
+    def _data_rect(self):
+        """The inner area of the right column: circuit name, map, speed trace and credit."""
+        x = self.chase.right + self.u(40)
+        return pygame.Rect(round(x), 0, round(self.W - x - self.u(40)), self.H)
 
     def _prepare_map(self):
         """Static map surface plus the transform used to place the trail and car on it."""
         u = self.u
-        panel = self._panel_rect()
-        area = pygame.Rect(panel.x + u(40), u(150), panel.w - u(80), u(430))
+        col = self._data_rect()
+        area = pygame.Rect(col.x + u(10), u(170), col.w - u(20), u(440))
         c = self.lap.centerline
         lo, hi = c.min(axis=0), c.max(axis=0)
         scale = min(area.w / (hi[0] - lo[0]), area.h / (hi[1] - lo[1]))
@@ -506,52 +467,66 @@ class LapRenderer:
 
         surf = pygame.Surface(self.canvas.get_size(), pygame.SRCALPHA)
         pts = to_map(np.vstack([c, c[:1]]))
-        pygame.draw.lines(surf, (46, 50, 60), False, pts, max(2, round(u(16))))
-        pygame.draw.lines(surf, (24, 26, 33), False, pts, max(1, round(u(9))))
+        pygame.draw.lines(surf, MAP_TRACK, False, pts, max(2, round(u(13))))
         # Round joins: without them thick pygame lines leave notches at every vertex
         for p in pts:
-            pygame.draw.circle(surf, (46, 50, 60), p, u(8))
-        for p in pts:
-            pygame.draw.circle(surf, (24, 26, 33), p, u(4.5))
-        s0 = to_map(c[0])
+            pygame.draw.circle(surf, MAP_TRACK, p, u(6.5))
         n0 = self.start_normal
-        a, b = to_map(c[0] + n0 * 40), to_map(c[0] - n0 * 40)
-        pygame.draw.line(surf, (240, 240, 240), a, b, max(2, round(u(4))))
-        return {"surface": surf, "to_map": to_map, "trail": to_map(np.column_stack([self.lap.x, self.lap.y])),
-                "start": s0}
+        a, b = to_map(c[0] + n0 * 45), to_map(c[0] - n0 * 45)
+        pygame.draw.line(surf, TEXT, a, b, max(2, round(u(4))))
+        return {"surface": surf, "to_map": to_map, "trail": to_map(np.column_stack([self.lap.x, self.lap.y]))}
 
-    def _prepare_traces(self):
+    def _prepare_trace(self):
+        """Where each sample of the lap sits on the speed chart."""
         u = self.u
-        panel = self._panel_rect()
-        x0, x1 = panel.x + u(70), panel.right - u(36)
-        speed_box = pygame.Rect(x0, u(640), x1 - x0, u(190))
-        pedal_box = pygame.Rect(x0, u(880), x1 - x0, u(120))
+        col = self._data_rect()
+        x0, x1 = col.x + u(58), col.right   # the gutter holds the y-axis tick labels
+        box = pygame.Rect(round(x0), round(u(712)), round(x1 - x0), round(u(180)))
         xs = x0 + (x1 - x0) * self.lap.progress
-        speed_y = speed_box.bottom - speed_box.h * np.clip(self.lap.kph / 350, 0, 1)
-        pedal_y = pedal_box.centery - pedal_box.h / 2 * np.clip(self.lap.throttle, -1, 1)
-        return {"speed_box": speed_box, "pedal_box": pedal_box, "xs": xs, "speed_y": speed_y,
-                "pedal_y": pedal_y}
+        ys = box.bottom - box.h * np.clip(self.lap.kph / 350, 0, 1)
+        return {"box": box, "xs": xs, "ys": ys}
+
+    def _draw_speed_trace(self, surf, x, i0, a):
+        u, tr, lap = self.u, self._trace, self.lap
+        box = tr["box"]
+        self.text(surf, "Speed, km/h", (x, box.y - u(42)), "regular", 22, TEXT_DIM)
+        for kph in (100, 200, 300):
+            y = box.bottom - box.h * kph / 350
+            pygame.draw.line(surf, PANEL_LINE, (box.x, y), (box.right, y), max(1, round(u(1))))
+            self.text(surf, str(kph), (box.x - u(12), y), "regular", 18, TEXT_DIM, anchor="midright")
+        n = i0 + 1
+        xs, ys = tr["xs"][:n + 1].copy(), tr["ys"][:n + 1].copy()
+        xs[-1] = tr["xs"][i0] + a * (tr["xs"][i0 + 1] - tr["xs"][i0])
+        ys[-1] = tr["ys"][i0] + a * (tr["ys"][i0 + 1] - tr["ys"][i0])
+        pygame.draw.line(surf, TEXT, (xs[-1], box.top), (xs[-1], box.bottom), max(1, round(u(2))))
+        w = max(2, round(u(3)))
+        for q in range(len(xs) - 1):
+            pygame.draw.line(surf, lap.color[min(q + 1, lap.n - 1)], (xs[q], ys[q]), (xs[q + 1], ys[q + 1]), w)
+        # Head of the trace: a dot with a surface-coloured ring, so it reads where it crosses the line
+        pygame.draw.circle(surf, PANEL_BG, (xs[-1], ys[-1]), u(9))
+        pygame.draw.circle(surf, TEXT, (xs[-1], ys[-1]), u(6))
+        # The x-axis is distance around the lap
+        self.text(surf, "start", (box.x, box.bottom + u(8)), "regular", 16, TEXT_DIM)
+        self.text(surf, "finish", (box.right, box.bottom + u(8)), "regular", 16, TEXT_DIM, anchor="topright")
+
+    def _fit_size(self, msg, weight, size, max_w, min_size=18):
+        """Largest font size up to `size` at which msg fits in max_w canvas pixels."""
+        while size > min_size and self.fonts.render(msg, weight, size, TEXT).get_width() > max_w:
+            size -= 1
+        return size
 
     def draw_panel(self, surf, t):
+        """Right column: circuit name, the map with the lap so far, the speed trace and the credit."""
         u, lap = self.u, self.lap
-        panel = self._panel_rect()
-        surf.fill(PANEL_BG, panel)
-        pygame.draw.line(surf, PANEL_LINE, panel.topleft, panel.bottomleft, max(1, round(u(2))))
+        surf.fill(PANEL_BG, (self.chase.right, 0, self.W - self.chase.right, self.H))
+        pygame.draw.line(surf, PANEL_LINE, self.chase.topright, self.chase.bottomright, max(1, round(u(2))))
+        col = self._data_rect()
+        x = col.x
 
-        # Header
-        x = panel.x + u(40)
-        self.text(surf, lap.track_name.upper(), (x, u(34)), "bold", 30)
-        length_km = lap.track_length / 1000
-        meta = f"{lap.track_id.upper()}  ·  {length_km:.2f} KM"
-        r = self.text(surf, meta, (x, u(78)), "semibold", 20, TEXT_DIM)
-        tag = SPLIT_LABELS.get(lap.track_split)
-        if tag:
-            img = self.fonts.render(tag, "bold", 16, (255, 255, 255))
-            pill = img.get_rect()
-            pill.inflate_ip(u(22), u(8))
-            pill.midleft = (r.right + u(18), r.centery)
-            pygame.draw.rect(surf, ACCENT, pill, border_radius=pill.h // 2)
-            surf.blit(img, img.get_rect(center=pill.center))
+        self.text(surf, lap.track_name, (x, u(34)), "bold", self._fit_size(lap.track_name, "bold", 36, col.w))
+        note = SPLIT_NOTES.get(lap.track_split, "")
+        line = f"{lap.track_length / 1000:.2f} km. {note}".strip()
+        self.text(surf, line, (x, u(88)), "regular", self._fit_size(line, "regular", 22, col.w), TEXT_DIM)
 
         # Map with the lap so far
         surf.blit(self._map["surface"], (0, 0))
@@ -561,70 +536,21 @@ class LapRenderer:
         for q in range(i0):
             pygame.draw.line(surf, lap.color[q + 1], trail[q], trail[q + 1], w)
         here = trail[i0] + a * (trail[i0 + 1] - trail[i0])
-        for rad, alpha in ((u(22), 40), (u(15), 80)):
-            glow = pygame.Surface((round(2 * rad), round(2 * rad)), pygame.SRCALPHA)
-            pygame.draw.circle(glow, (*ACCENT, alpha), (rad, rad), rad)
-            surf.blit(glow, (here[0] - rad, here[1] - rad))
-        pygame.draw.circle(surf, (255, 255, 255), here, u(8))
-        pygame.draw.circle(surf, ACCENT, here, u(5))
+        pygame.draw.circle(surf, PANEL_BG, here, u(12))
+        pygame.draw.circle(surf, TEXT, here, u(8))
 
-        self._draw_speed_trace(surf, i0, a)
-        self._draw_pedal_trace(surf, i0, a)
+        self._draw_speed_trace(surf, x, i0, a)
 
-        footer = f"MODEL {lap.model_name.upper()}  ·  STABLE-BASELINES3 SAC" if lap.model_name else "STABLE-BASELINES3 SAC"
-        self.text(surf, footer, (x, self.H - u(74)), "semibold", 16, TEXT_DIM)
-        self.text(surf, "github.com/AakashVijeta/racing-line-optimization", (x, self.H - u(48)),
-                  "regular", 16, TEXT_DIM)
-
-    def _cursor(self, surf, box, x):
-        pygame.draw.line(surf, (255, 255, 255), (x, box.top), (x, box.bottom), max(1, round(self.u(2))))
-
-    def _draw_speed_trace(self, surf, i0, a):
-        u, tr, lap = self.u, self._traces, self.lap
-        box = tr["speed_box"]
-        self.text(surf, "SPEED", (box.x - u(30), box.y - u(40)), "semibold", 18, TEXT_DIM)
-        for kph in (100, 200, 300):
-            y = box.bottom - box.h * kph / 350
-            pygame.draw.line(surf, PANEL_LINE, (box.x, y), (box.right, y), max(1, round(u(1))))
-            self.text(surf, str(kph), (box.x - u(10), y), "regular", 14, TEXT_DIM, anchor="midright")
-        n = i0 + 1
-        xs, ys = tr["xs"][:n + 1].copy(), tr["speed_y"][:n + 1].copy()
-        xs[-1] = tr["xs"][i0] + a * (tr["xs"][i0 + 1] - tr["xs"][i0])
-        ys[-1] = tr["speed_y"][i0] + a * (tr["speed_y"][i0 + 1] - tr["speed_y"][i0])
-        if len(xs) >= 2:
-            fill = pygame.Surface(self.canvas.get_size(), pygame.SRCALPHA)
-            poly = np.vstack([np.column_stack([xs, ys]), [[xs[-1], box.bottom], [xs[0], box.bottom]]])
-            pygame.draw.polygon(fill, (255, 255, 255, 22), poly)
-            surf.blit(fill, (0, 0))
-            w = max(2, round(u(3)))
-            for q in range(len(xs) - 1):
-                pygame.draw.line(surf, lap.color[min(q + 1, lap.n - 1)], (xs[q], ys[q]), (xs[q + 1], ys[q + 1]), w)
-        self._cursor(surf, box, xs[-1])
-
-    def _draw_pedal_trace(self, surf, i0, a):
-        u, tr, lap = self.u, self._traces, self.lap
-        box = tr["pedal_box"]
-        self.text(surf, "THROTTLE", (box.x - u(30), box.y - u(40)), "semibold", 18, THROTTLE_GREEN)
-        self.text(surf, "BRAKE", (box.x + u(80), box.y - u(40)), "semibold", 18, BRAKE_RED)
-        pygame.draw.line(surf, PANEL_LINE, (box.x, box.centery), (box.right, box.centery), max(1, round(u(1))))
-        xs, ys = tr["xs"][:i0 + 2], tr["pedal_y"][:i0 + 2]
-        fill = pygame.Surface(self.canvas.get_size(), pygame.SRCALPHA)
-        w = max(1, round(u(2)))
-        for q in range(len(xs) - 1):
-            col = THROTTLE_GREEN if lap.throttle[q + 1] >= 0 else BRAKE_RED
-            pygame.draw.polygon(fill, (*col, 70), ((xs[q], box.centery), (xs[q], ys[q]), (xs[q + 1], ys[q + 1]),
-                                                   (xs[q + 1], box.centery)))
-        surf.blit(fill, (0, 0))
-        for q in range(len(xs) - 1):
-            col = THROTTLE_GREEN if lap.throttle[q + 1] >= 0 else BRAKE_RED
-            pygame.draw.line(surf, col, (xs[q], ys[q]), (xs[q + 1], ys[q + 1]), w)
-        self._cursor(surf, box, tr["xs"][i0] + a * (tr["xs"][i0 + 1] - tr["xs"][i0]))
+        credit = f"Model {lap.model_name}, Soft Actor-Critic" if lap.model_name else "Soft Actor-Critic"
+        self.text(surf, credit, (x, self.H - u(62)), "regular", 18, TEXT_DIM)
+        self.text(surf, "github.com/AakashVijeta/racing-line-optimization", (x, self.H - u(38)),
+                  "regular", 18, TEXT_DIM)
 
     # -------------------------------------------------------------- render
     def render(self, t):
         """Draw the frame at time t (seconds from the start of the lap). Returns a Surface at out_size."""
         self.draw_chase(self.canvas, t)
-        self.draw_hud(self.canvas, t)
+        self.draw_instruments(self.canvas, t)
         self.draw_panel(self.canvas, t)
         if self.canvas.get_size() == self.out_size:
             return self.canvas

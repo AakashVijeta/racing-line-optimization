@@ -2,13 +2,16 @@
 Watch the agent drive laps on randomly chosen tracks.
 
     python sac_eval.py                 # default model, all tracks
-    python sac_eval.py --model v12
+    python sac_eval.py --model v1
 """
 import argparse
+
 from stable_baselines3 import SAC
+
+from config import TRACK_IDS, TRACK_WIDTHS, model_path_for, obs_version_for
 from racing_env import RacingEnv
 from track_preprocessing import build_track_pool, prepare_tracks
-from config import TRACK_IDS, TRACK_WIDTHS, model_path_for, obs_version_for
+
 
 def main():
     parser = argparse.ArgumentParser(description="Visual evaluation on random tracks")
@@ -46,7 +49,7 @@ def main():
 
             while not done and not env.quit_requested:
                 action, _ = model.predict(obs, deterministic=True)
-                obs, reward, terminated, truncated, info = env.step(action)
+                obs, _, terminated, truncated, info = env.step(action)
 
                 env.render()
                 done = terminated or truncated

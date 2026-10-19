@@ -65,7 +65,33 @@ def test_old_recordings_without_metadata_still_load(tmp_path, circle_lap):
     assert old.lap_time == pytest.approx(old.duration)
 
 
-def test_speed_colour_scale_and_time_format():
-    slow, fast = speed_color(60), speed_color(330)
-    assert slow[2] > slow[0] and fast[0] > fast[2]  # blue when slow, red/yellow when fast
+def test_time_format():
     assert format_laptime(87.9) == "1:27.900"
+
+
+def test_renders_portrait_frames_too(circle_lap):
+    renderer = LapRenderer(circle_lap, width=270, height=480, supersample=1)
+    frame = surface_to_array(renderer.render(circle_lap.duration / 2))
+    assert frame.shape == (480, 270, 3)
+    assert frame.std() > 10
+
+
+def test_speed_colours_get_lighter_with_speed():
+    """The scale must read in order without relying on hue (colour-blind viewers, greyscale)."""
+    from lap_render import SPEED_STOPS
+
+    def luminance(rgb):
+        c = np.array(rgb) / 255.0
+        c = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+        return float(c @ [0.2126, 0.7152, 0.0722])
+
+    lum = [luminance(rgb) for _, rgb in SPEED_STOPS]
+    assert all(b > a for a, b in zip(lum, lum[1:]))
+    assert int(speed_color(330).sum()) > int(speed_color(60).sum())
+
+
+def test_sectors_split_the_lap_into_thirds_by_distance(circle_lap):
+    s1, s2, s3 = circle_lap.sector_ends
+    assert s1 == pytest.approx(circle_lap.lap_time / 3, abs=2 * DT)  # constant speed: equal times
+    assert s2 == pytest.approx(2 * circle_lap.lap_time / 3, abs=2 * DT)
+    assert s3 == pytest.approx(circle_lap.lap_time)

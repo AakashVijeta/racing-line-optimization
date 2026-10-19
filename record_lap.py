@@ -15,9 +15,8 @@ import sys
 import numpy as np
 from stable_baselines3 import SAC
 
-from config import (DEFAULT_MODEL_VERSION, TRACK_IDS, TRACK_WIDTHS, model_path_for,
-                    obs_version_for, track_split)
-from racing_env import RacingEnv
+from config import DEFAULT_MODEL_VERSION, TRACK_IDS, TRACK_WIDTHS, model_path_for, obs_version_for, track_split
+from racing_env import RacingEnv, drive_lap
 from track_preprocessing import build_track_pool, prepare_tracks
 
 
@@ -43,22 +42,18 @@ def record_lap(model, env):
         hist["v"].append(env.car.v)
         hist["arc"].append(env._cumulative_arc)
 
-    obs, _ = env.reset()
-    done = False
-    info = {}
-    while not done:
+    def log_step(action):
         log_state()
-        action, _ = model.predict(obs, deterministic=True)
         hist["steering"].append(float(action[0]))
         hist["throttle"].append(float(action[1]))
-        obs, _, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
+
+    _, info = drive_lap(model, env, on_step=log_step)
 
     # Post-step state, so the last frame is where the lap ended; repeat the last input
     log_state()
     hist["steering"].append(hist["steering"][-1] if hist["steering"] else 0.0)
     hist["throttle"].append(hist["throttle"][-1] if hist["throttle"] else 0.0)
-    return {k: np.array(v, dtype=float) for k, v in hist.items()}, info.get("termination_reason", "unknown")
+    return {k: np.array(v, dtype=float) for k, v in hist.items()}, info["termination_reason"]
 
 
 def main():

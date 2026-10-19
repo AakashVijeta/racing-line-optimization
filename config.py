@@ -28,7 +28,6 @@ TRACK_WIDTHS = {
     "fr-1969": 15.0
 }
 
-DEFAULT_TRACK_WIDTH = 15.0
 
 # Held out of training. Validation tracks drive best-model selection during
 # training, so only the test track gives an unbiased generalization result.
@@ -58,22 +57,20 @@ def track_split(track_id):
 # --- Model Paths ---
 
 MODEL_PATHS = {
-    "v10": "./models/sac_v10/best_model/best_model.zip",
-    "v11": "./models/sac_v11/best_model/best_model.zip",
-    "v12": "./models/sac_v12/best_model/best_model.zip",
-    "v13": "./models/sac_v13/best_model/best_model.zip",
-    # Replace with the top pick from `python checkpoint_sweep.py --run sac_v14`
-    "v14": "./models/sac_v14/best_model/best_model.zip",
-    # Best validation checkpoint, at 2.0M steps (the run was stopped at 3.6M)
-    "v15b": "./models/sac_v15b/best_model/best_model.zip",
+    # Real circuits only
+    "v1": "./models/sac_v1/best_model/best_model.zip",
+    # Real + procedural tracks. Best validation checkpoint, at 2.0M steps (the run was stopped at 3.6M)
+    "v2": "./models/sac_v2/best_model/best_model.zip",
+    # Same settings and seed as v2, run on to 5.2M steps. Best validation checkpoint, at 3.0M steps
+    "v3": "./models/sac_v3/best_model/best_model.zip",
 }
 
-DEFAULT_MODEL_VERSION = "v15b"
+DEFAULT_MODEL_VERSION = "v2"
 
 # Observation layout each model was trained with (see RacingEnv's obs_version):
 # 1 = vertex-snapped lookahead/boundaries, 2 = interpolated/segment-accurate,
 # 3 = adds track width, previous action and signed curvature.
-OBS_VERSIONS = {"v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 2, "v15b": 3}
+OBS_VERSIONS = {"v1": 2, "v2": 3, "v3": 3}
 LATEST_OBS_VERSION = 3
 
 def get_model_path(version=None):

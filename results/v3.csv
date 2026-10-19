@@ -1,0 +1,91 @@
+Track Name,Split,Lap Time (s),Formatted Time,Avg Speed (km/h),Status
+PROC-300-0044,test,56.75,0:56.750,219.6,Finished
+US-1909,train,58.9,0:58.900,250.0,Finished
+PROC-300-0027,test,60.2,1:00.200,262.5,Finished
+PT-1972,train,62.6,1:02.600,240.2,Finished
+AT-1969,train,62.95,1:02.950,246.5,Finished
+PROC-300-0035,test,63.45,1:03.450,205.0,Finished
+PROC-300-0047,test,63.95,1:03.950,243.2,Finished
+CA-1978,train,66.5,1:06.500,236.8,Finished
+ES-1991,train,66.85,1:06.850,251.6,Finished
+NL-1948,train,67.45,1:07.450,227.8,Finished
+PROC-300-0042,test,67.6,1:07.600,237.0,Finished
+BR-1940,train,67.7,1:07.700,228.9,Finished
+DE-1932,train,68.05,1:08.050,241.3,Finished
+PROC-300-0041,test,68.35,1:08.350,190.7,Finished
+PROC-300-0003,test,68.7,1:08.700,253.0,Finished
+PROC-300-0029,test,68.95,1:08.950,240.6,Finished
+ZA-1961,train,69.05,1:09.050,236.4,Finished
+HU-1986,train,69.35,1:09.350,227.6,Finished
+PROC-300-0018,test,69.65,1:09.650,251.7,Finished
+AR-1952,train,70.45,1:10.450,220.3,Finished
+FR-1960,train,70.65,1:10.650,227.8,Finished
+PROC-300-0040,test,70.95,1:10.950,192.0,Finished
+US-1956,train,71.75,1:11.750,274.0,Finished
+PROC-300-0019,test,71.8,1:11.800,254.6,Finished
+IT-1914,train,71.85,1:11.850,263.2,Finished
+MX-1962,train,71.9,1:11.900,215.8,Finished
+PROC-300-0032,test,73.3,1:13.300,244.5,Finished
+IT-1953,train,73.45,1:13.450,240.6,Finished
+BR-1977,train,73.75,1:13.750,242.9,Finished
+PROC-300-0004,test,74.6,1:14.600,234.2,Finished
+PROC-300-0020,test,74.9,1:14.900,197.3,Finished
+PROC-300-0007,test,75.25,1:15.250,253.2,Finished
+PROC-300-0038,test,75.9,1:15.900,238.2,Finished
+IT-1922,train,76.0,1:16.000,274.5,Finished
+PROC-300-0036,test,76.9,1:16.900,200.7,Finished
+PROC-300-0049,test,76.95,1:16.950,184.9,Finished
+QA-2004,train,77.0,1:17.000,254.0,Finished
+AU-1953,train,77.6,1:17.600,245.0,Finished
+PROC-300-0045,test,78.1,1:18.100,233.3,Finished
+PROC-300-0000,test,79.3,1:19.300,270.1,Finished
+TR-2005,train,79.75,1:19.750,240.3,Finished
+AE-2009,train,79.95,1:19.950,238.8,Finished
+US-2022,train,81.7,1:21.700,239.3,Finished
+PROC-300-0023,test,81.7,1:21.700,209.8,Finished
+GB-1948,train,81.75,1:21.750,259.4,Finished
+BH-2002,train,83.4,1:23.400,234.4,Finished
+PROC-300-0016,test,83.65,1:23.650,216.3,Finished
+SG-2008,train,84.5,1:24.500,211.1,Finished
+JP-1962,test,84.85,1:24.850,247.1,Finished
+PROC-300-0002,test,85.25,1:25.250,269.3,Finished
+PROC-300-0025,test,85.35,1:25.350,182.3,Finished
+PROC-300-0005,test,85.85,1:25.850,185.4,Finished
+FR-1969,train,86.4,1:26.400,242.8,Finished
+MY-1999,train,86.5,1:26.500,231.6,Finished
+US-2012,train,87.15,1:27.150,228.4,Finished
+SA-2021,train,87.55,1:27.550,255.4,Finished
+PROC-300-0017,test,87.85,1:27.850,246.1,Finished
+ES-2026,train,88.05,1:28.050,222.8,Finished
+PROC-300-0009,test,88.05,1:28.050,229.8,Finished
+PROC-300-0026,test,88.3,1:28.300,202.4,Finished
+PROC-300-0010,test,88.8,1:28.800,231.9,Finished
+AZ-2016,train,89.35,1:29.350,240.0,Finished
+PROC-300-0030,test,89.7,1:29.700,222.6,Finished
+RU-2014,train,90.4,1:30.400,232.8,Finished
+PROC-300-0011,test,93.2,1:33.200,254.9,Finished
+PROC-300-0015,test,93.65,1:33.650,198.8,Finished
+PROC-300-0006,test,96.1,1:36.100,219.1,Finished
+BE-1925,val,96.65,1:36.650,260.4,Finished
+PROC-300-0024,test,98.25,1:38.250,214.4,Finished
+PROC-300-0001,test,99.35,1:39.350,211.8,Finished
+PROC-300-0013,test,99.95,1:39.950,201.8,Finished
+PROC-300-0043,test,102.35,1:42.350,230.9,Finished
+PROC-300-0008,test,104.3,1:44.300,238.6,Finished
+PROC-300-0014,test,104.55,1:44.550,222.4,Finished
+PROC-300-0037,test,104.55,1:44.550,236.6,Finished
+PROC-300-0034,test,108.95,1:48.950,223.4,Finished
+PROC-300-0031,test,111.65,1:51.650,200.0,Finished
+PROC-300-0039,test,112.35,1:52.350,203.0,Finished
+PROC-300-0028,test,116.75,1:56.750,202.7,Finished
+PROC-300-0022,test,123.9,2:03.900,186.0,Finished
+PROC-300-0033,test,125.1,2:05.100,187.1,Finished
+MC-1929,val,,DNF,0.0,off_track at 652 steps (Arc: 0.37)
+US-2023,train,,DNF,0.0,stalled at 72 steps (Arc: 0.00)
+DE-1927,train,,DNF,0.0,off_track at 1396 steps (Arc: 0.88)
+PT-2008,train,,DNF,0.0,off_track at 467 steps (Arc: 0.29)
+CN-2004,train,,DNF,0.0,off_track at 179 steps (Arc: 0.08)
+PROC-300-0012,test,,DNF,0.0,off_track at 285 steps (Arc: 0.11)
+PROC-300-0021,test,,DNF,0.0,off_track at 1147 steps (Arc: 0.70)
+PROC-300-0046,test,,DNF,0.0,stalled at 843 steps (Arc: 0.46)
+PROC-300-0048,test,,DNF,0.0,stalled at 1457 steps (Arc: 0.92)

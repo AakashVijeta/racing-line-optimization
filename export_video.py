@@ -1,5 +1,5 @@
 """
-Render a recorded lap (record_lap.py) to a broadcast-style MP4, a looping GIF
+Render a recorded lap (record_lap.py) to an MP4, a looping GIF
 and a poster PNG.
 
     python export_video.py                                # suzuka_lap.npz -> assets/suzuka_lap.{mp4,gif,png}
